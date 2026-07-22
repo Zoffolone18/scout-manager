@@ -2032,7 +2032,7 @@ async function disconnettiDropbox() {
    collegamento. */
 
 let googleCal = {
-  clientId: "", accessToken: "", tokenExpiry: 0, refreshToken: "",
+  clientId: "", proxyUrl: "", accessToken: "", tokenExpiry: 0, refreshToken: "",
   email: "", calendarId: "", calendarName: "",
   connesso: false, statoSync: "inattivo", ultimaSync: null, ultimoErrore: null,
   syncToken: null,
@@ -2042,10 +2042,14 @@ function googleRedirectUri() {
   return window.location.origin + window.location.pathname;
 }
 
-async function avviaConnessioneGoogle(clientId) {
+async function avviaConnessioneGoogle(clientId, proxyUrl) {
   clientId = clientId.trim();
+  proxyUrl = proxyUrl.trim().replace(/\/$/, "");
   if (!clientId) { alert("Incolla prima il Client ID ottenuto da Google Cloud Console."); return; }
+  if (!proxyUrl) { alert("Incolla prima l'indirizzo del Worker Cloudflare (il \"ponte\" verso Google)."); return; }
   await idbSet("google-client-id", clientId);
+  await idbSet("google-proxy-url", proxyUrl);
+  googleCal.proxyUrl = proxyUrl;
   const verifier = generaCodeVerifier();
   await idbSet("google-verifier", verifier);
   const stato = generaCodeVerifier(); // riusato solo come stringa casuale, per il parametro "state" anti-CSRF
@@ -2078,12 +2082,13 @@ async function gestisciRitornoOAuthGoogle() {
   }
   const clientId = await idbGet("google-client-id").catch(() => null);
   const verifier = await idbGet("google-verifier").catch(() => null);
-  if (!clientId || !verifier) {
-    alert("Sessione di collegamento Google scaduta: riprova da Strumenti.");
+  const proxyUrl = await idbGet("google-proxy-url").catch(() => null);
+  if (!clientId || !verifier || !proxyUrl) {
+    alert("Sessione di collegamento Google scaduta, o manca l'indirizzo del Worker: riprova da Strumenti.");
     return;
   }
   try {
-    const resp = await fetch("https://oauth2.googleapis.com/token", {
+    const resp = await fetch(proxyUrl, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -2124,8 +2129,8 @@ async function gestisciRitornoOAuthGoogle() {
 
 async function assicuraTokenGoogleValido() {
   if (googleCal.accessToken && Date.now() < googleCal.tokenExpiry) return googleCal.accessToken;
-  if (!googleCal.refreshToken || !googleCal.clientId) throw new Error("Non connesso a Google Calendar.");
-  const resp = await fetch("https://oauth2.googleapis.com/token", {
+  if (!googleCal.refreshToken || !googleCal.clientId || !googleCal.proxyUrl) throw new Error("Non connesso a Google Calendar.");
+  const resp = await fetch(googleCal.proxyUrl, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -2141,6 +2146,7 @@ async function assicuraTokenGoogleValido() {
 
 async function caricaConfigGoogleSalvata() {
   const clientId = await idbGet("google-client-id").catch(() => null);
+  const proxyUrl = await idbGet("google-proxy-url").catch(() => null);
   const refreshToken = await idbGet("google-refresh-token").catch(() => null);
   const email = await idbGet("google-email").catch(() => null);
   const calendarId = await idbGet("google-calendar-id").catch(() => null);
@@ -2148,6 +2154,7 @@ async function caricaConfigGoogleSalvata() {
   const syncToken = await idbGet("google-sync-token").catch(() => null);
   const ultimaSync = await idbGet("google-ultima-sync").catch(() => null);
   if (clientId) googleCal.clientId = clientId;
+  if (proxyUrl) googleCal.proxyUrl = proxyUrl;
   if (refreshToken) googleCal.refreshToken = refreshToken;
   if (email) googleCal.email = email;
   if (calendarId) googleCal.calendarId = calendarId;
@@ -2159,7 +2166,7 @@ async function caricaConfigGoogleSalvata() {
 
 async function disconnettiGoogle() {
   if (!confirm("Scollegare Google Calendar? Gli eventi restano nell'app, ma smetteranno di sincronizzarsi con Google finché non ti ricolleghi.")) return;
-  googleCal = { clientId: "", accessToken: "", tokenExpiry: 0, refreshToken: "", email: "", calendarId: "", calendarName: "", connesso: false, statoSync: "inattivo", ultimaSync: null, ultimoErrore: null, syncToken: null };
+  googleCal = { clientId: "", proxyUrl: "", accessToken: "", tokenExpiry: 0, refreshToken: "", email: "", calendarId: "", calendarName: "", connesso: false, statoSync: "inattivo", ultimaSync: null, ultimoErrore: null, syncToken: null };
   await idbDelete("google-refresh-token");
   await idbDelete("google-calendar-id");
   await idbDelete("google-calendar-name");
@@ -2469,6 +2476,9 @@ function renderGoogleCalendarStatusHTML() {
         <label>Client ID Google
           <input type="text" id="google-client-id-input" placeholder="xxxxxxxxxx.apps.googleusercontent.com" value="${esc(googleCal.clientId)}">
         </label>
+        <label>Indirizzo del Worker Cloudflare <span class="muted" style="font-weight:400;">(il "ponte" che tiene al sicuro il client secret)</span>
+          <input type="text" id="google-proxy-url-input" placeholder="https://tuoworker.tuonome.workers.dev" value="${esc(googleCal.proxyUrl)}">
+        </label>
         <div class="import-actions">
           <button class="btn btn-primary" id="btn-collega-google">Collega Google Calendar</button>
         </div>
@@ -2494,7 +2504,7 @@ function renderGoogleCalendarStatusHTML() {
 function wireGoogleCalendarStatusHTML(content) {
   if (!googleCal.connesso) {
     const btn = document.getElementById("btn-collega-google");
-    if (btn) btn.onclick = () => avviaConnessioneGoogle(document.getElementById("google-client-id-input").value);
+    if (btn) btn.onclick = () => avviaConnessioneGoogle(document.getElementById("google-client-id-input").value, document.getElementById("google-proxy-url-input").value);
     return;
   }
   const btnSync = document.getElementById("btn-sincronizza-ora-google");
