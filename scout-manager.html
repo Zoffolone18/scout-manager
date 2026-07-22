@@ -2023,6 +2023,484 @@ async function disconnettiDropbox() {
   renderDropboxStatusBar("non-configurato");
 }
 
+/* ===================== Integrazione Google Calendar ===================== */
+/* Flusso OAuth PKCE CON redirect_uri (Google, a differenza di Dropbox, non
+   permette più il flusso "senza redirect": bisogna tornare a una pagina
+   web vera, quindi l'app deve essere ospitata online, non aperta come
+   file locale). Il redirect punta alla pagina stessa dell'app: al
+   caricamento controlliamo se nell'URL c'è un "code" e completiamo lì il
+   collegamento. */
+
+let googleCal = {
+  clientId: "", accessToken: "", tokenExpiry: 0, refreshToken: "",
+  email: "", calendarId: "", calendarName: "",
+  connesso: false, statoSync: "inattivo", ultimaSync: null, ultimoErrore: null,
+  syncToken: null,
+};
+
+function googleRedirectUri() {
+  return window.location.origin + window.location.pathname;
+}
+
+async function avviaConnessioneGoogle(clientId) {
+  clientId = clientId.trim();
+  if (!clientId) { alert("Incolla prima il Client ID ottenuto da Google Cloud Console."); return; }
+  await idbSet("google-client-id", clientId);
+  const verifier = generaCodeVerifier();
+  await idbSet("google-verifier", verifier);
+  const stato = generaCodeVerifier(); // riusato solo come stringa casuale, per il parametro "state" anti-CSRF
+  await idbSet("google-oauth-state", stato);
+  const challenge = await generaCodeChallenge(verifier);
+  const scope = encodeURIComponent("https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email");
+  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}` +
+    `&redirect_uri=${encodeURIComponent(googleRedirectUri())}` +
+    `&response_type=code&scope=${scope}` +
+    `&code_challenge=${encodeURIComponent(challenge)}&code_challenge_method=S256` +
+    `&access_type=offline&prompt=consent&include_granted_scopes=true` +
+    `&state=${encodeURIComponent(stato)}`;
+  window.location.href = authUrl;
+}
+
+// Da chiamare una volta all'avvio dell'app: controlla se siamo appena
+// tornati da Google con un "code" nell'URL, e se sì completa il collegamento.
+async function gestisciRitornoOAuthGoogle() {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("code");
+  const statoRicevuto = params.get("state");
+  if (!code) return;
+  // Pulisce subito l'URL (il codice non deve restare visibile/ricaricabile)
+  window.history.replaceState({}, "", window.location.pathname);
+
+  const statoSalvato = await idbGet("google-oauth-state").catch(() => null);
+  if (!statoRicevuto || statoRicevuto !== statoSalvato) {
+    alert("Collegamento a Google annullato: il controllo di sicurezza (state) non corrisponde. Riprova.");
+    return;
+  }
+  const clientId = await idbGet("google-client-id").catch(() => null);
+  const verifier = await idbGet("google-verifier").catch(() => null);
+  if (!clientId || !verifier) {
+    alert("Sessione di collegamento Google scaduta: riprova da Strumenti.");
+    return;
+  }
+  try {
+    const resp = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code, grant_type: "authorization_code", client_id: clientId,
+        redirect_uri: googleRedirectUri(), code_verifier: verifier,
+      }),
+    });
+    if (!resp.ok) throw new Error("scambio codice non riuscito (" + resp.status + ")");
+    const data = await resp.json();
+    googleCal.clientId = clientId;
+    googleCal.accessToken = data.access_token;
+    googleCal.tokenExpiry = Date.now() + data.expires_in * 1000 - 60000;
+    if (data.refresh_token) {
+      googleCal.refreshToken = data.refresh_token;
+      await idbSet("google-refresh-token", data.refresh_token);
+    }
+    await idbDelete("google-verifier");
+    await idbDelete("google-oauth-state");
+
+    const infoResp = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+      headers: { Authorization: "Bearer " + googleCal.accessToken },
+    });
+    const info = await infoResp.json();
+    googleCal.email = info.email || "";
+    await idbSet("google-email", googleCal.email);
+
+    googleCal.connesso = true;
+    await mostraSceltaCalendarioGoogle();
+  } catch (e) {
+    console.error(e);
+    alert("Collegamento a Google Calendar non riuscito: " + e.message);
+  }
+}
+
+async function assicuraTokenGoogleValido() {
+  if (googleCal.accessToken && Date.now() < googleCal.tokenExpiry) return googleCal.accessToken;
+  if (!googleCal.refreshToken || !googleCal.clientId) throw new Error("Non connesso a Google Calendar.");
+  const resp = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token", refresh_token: googleCal.refreshToken, client_id: googleCal.clientId,
+    }),
+  });
+  if (!resp.ok) throw new Error("Sessione Google scaduta: riconnettiti da Strumenti.");
+  const data = await resp.json();
+  googleCal.accessToken = data.access_token;
+  googleCal.tokenExpiry = Date.now() + data.expires_in * 1000 - 60000;
+  return googleCal.accessToken;
+}
+
+async function caricaConfigGoogleSalvata() {
+  const clientId = await idbGet("google-client-id").catch(() => null);
+  const refreshToken = await idbGet("google-refresh-token").catch(() => null);
+  const email = await idbGet("google-email").catch(() => null);
+  const calendarId = await idbGet("google-calendar-id").catch(() => null);
+  const calendarName = await idbGet("google-calendar-name").catch(() => null);
+  const syncToken = await idbGet("google-sync-token").catch(() => null);
+  const ultimaSync = await idbGet("google-ultima-sync").catch(() => null);
+  if (clientId) googleCal.clientId = clientId;
+  if (refreshToken) googleCal.refreshToken = refreshToken;
+  if (email) googleCal.email = email;
+  if (calendarId) googleCal.calendarId = calendarId;
+  if (calendarName) googleCal.calendarName = calendarName;
+  if (syncToken) googleCal.syncToken = syncToken;
+  if (ultimaSync) googleCal.ultimaSync = ultimaSync;
+  googleCal.connesso = !!(refreshToken && calendarId);
+}
+
+async function disconnettiGoogle() {
+  if (!confirm("Scollegare Google Calendar? Gli eventi restano nell'app, ma smetteranno di sincronizzarsi con Google finché non ti ricolleghi.")) return;
+  googleCal = { clientId: "", accessToken: "", tokenExpiry: 0, refreshToken: "", email: "", calendarId: "", calendarName: "", connesso: false, statoSync: "inattivo", ultimaSync: null, ultimoErrore: null, syncToken: null };
+  await idbDelete("google-refresh-token");
+  await idbDelete("google-calendar-id");
+  await idbDelete("google-calendar-name");
+  await idbDelete("google-sync-token");
+  await idbDelete("google-ultima-sync");
+  renderStrumenti(document.getElementById("content"));
+}
+
+async function elencoCalendariGoogle() {
+  const token = await assicuraTokenGoogleValido();
+  const resp = await fetch("https://www.googleapis.com/calendar/v3/users/me/calendarList", {
+    headers: { Authorization: "Bearer " + token },
+  });
+  if (!resp.ok) throw new Error("Impossibile leggere l'elenco calendari (" + resp.status + ")");
+  const data = await resp.json();
+  return data.items || [];
+}
+
+async function mostraSceltaCalendarioGoogle() {
+  const root = document.getElementById("modal-root");
+  if (!root) return;
+  let calendari;
+  try {
+    calendari = await elencoCalendariGoogle();
+  } catch (e) {
+    alert("Errore nel leggere i tuoi calendari Google: " + e.message);
+    return;
+  }
+  root.innerHTML = `
+    <div class="modal-overlay" id="modal-overlay-google-cal">
+      <div class="modal-box">
+        <h2>Scegli il calendario Google</h2>
+        <p class="muted">Account collegato: <strong>${esc(googleCal.email)}</strong>. Scegli quale calendario Google sincronizzare con l'app (es. "Calcio").</p>
+        <div class="import-controls" style="flex-direction:column; align-items:stretch; gap:8px;">
+          ${calendari.map(c => `
+            <label style="display:flex; align-items:center; gap:8px;">
+              <input type="radio" name="google-cal-scelta" value="${esc(c.id)}" data-nome="${esc(c.summary)}" ${c.primary ? "checked" : ""}>
+              ${esc(c.summary)}${c.primary ? " (principale)" : ""}
+            </label>`).join("")}
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-primary" id="btn-conferma-calendario-google">Continua</button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById("btn-conferma-calendario-google").onclick = async () => {
+    const scelto = document.querySelector('input[name="google-cal-scelta"]:checked');
+    if (!scelto) { alert("Scegli un calendario."); return; }
+    googleCal.calendarId = scelto.value;
+    googleCal.calendarName = scelto.dataset.nome;
+    await idbSet("google-calendar-id", googleCal.calendarId);
+    await idbSet("google-calendar-name", googleCal.calendarName);
+    googleCal.connesso = true;
+    await mostraScelteCollegamentoIniziale();
+  };
+}
+
+async function mostraScelteCollegamentoIniziale() {
+  const root = document.getElementById("modal-root");
+  if (!root) return;
+  root.innerHTML = `
+    <div class="modal-overlay" id="modal-overlay-google-scelta">
+      <div class="modal-box">
+        <h2>Primo collegamento — come vuoi procedere?</h2>
+        <p class="muted">Calendario scelto: <strong>${esc(googleCal.calendarName)}</strong>.</p>
+        <div class="import-controls" style="flex-direction:column; align-items:stretch; gap:10px;">
+          <button class="btn btn-ghost" id="btn-scelta-importa" style="text-align:left; padding:12px;">
+            <strong>Importa da Google</strong><br><span class="muted" style="font-weight:400;">Porta nell'app gli eventi già presenti su "${esc(googleCal.calendarName)}"</span>
+          </button>
+          <button class="btn btn-ghost" id="btn-scelta-esporta" style="text-align:left; padding:12px;">
+            <strong>Esporta verso Google</strong><br><span class="muted" style="font-weight:400;">Carica su "${esc(googleCal.calendarName)}" gli eventi già presenti nell'app</span>
+          </button>
+          <button class="btn btn-primary" id="btn-scelta-entrambi" style="text-align:left; padding:12px;">
+            <strong>Sincronizza entrambi</strong><br><span style="font-weight:400; opacity:0.85;">Unisce le due liste evitando duplicati (consigliato)</span>
+          </button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById("btn-scelta-importa").onclick = () => eseguiCollegamentoIniziale("importa");
+  document.getElementById("btn-scelta-esporta").onclick = () => eseguiCollegamentoIniziale("esporta");
+  document.getElementById("btn-scelta-entrambi").onclick = () => eseguiCollegamentoIniziale("entrambi");
+}
+
+async function eseguiCollegamentoIniziale(modalita) {
+  const root = document.getElementById("modal-root");
+  if (root) root.innerHTML = "";
+  googleCal.statoSync = "in corso";
+  renderStrumenti(document.getElementById("content"));
+  try {
+    if (modalita === "esporta") {
+      for (const ev of eventi) await pushEventoAGoogle(ev);
+    } else {
+      // "importa" e "entrambi" partono entrambi da una sincronizzazione
+      // completa: quella già unisce (pull + push) evitando duplicati.
+      await sincronizzaOra({ primaVolta: true, ancheEsportazione: modalita === "entrambi" });
+    }
+    googleCal.statoSync = "ok";
+    googleCal.ultimoErrore = null;
+  } catch (e) {
+    console.error(e);
+    googleCal.statoSync = "errore";
+    googleCal.ultimoErrore = e.message;
+  }
+  savePlayers();
+  renderStrumenti(document.getElementById("content"));
+}
+
+/* ---- Corrispondenza campi app <-> Google ---- */
+function eventoAGoogleBody(ev) {
+  const titolo = `${ev.tipo || "Evento"}${ev.luogo ? " - " + ev.luogo : ""}`;
+  const descrizioneParti = [];
+  descrizioneParti.push(`Finalità: ${ev.categoria || "Scouting"}`);
+  if (ev.note) descrizioneParti.push(ev.note);
+  if ((ev.giocatoriIds || []).length) {
+    const nomi = ev.giocatoriIds.map(id => { const p = players.find(pl => pl.id === id); return p ? `${p.cognome} ${p.nome}` : null; }).filter(Boolean);
+    if (nomi.length) descrizioneParti.push("Giocatori convocati: " + nomi.join(", "));
+  }
+  const body = {
+    summary: titolo,
+    location: ev.luogo || "",
+    description: descrizioneParti.join("\n\n"),
+    extendedProperties: {
+      private: {
+        scoutManagerId: ev.id,
+        tipo: ev.tipo || "",
+        categoria: ev.categoria || "",
+        giocatoriIds: JSON.stringify(ev.giocatoriIds || []),
+        notaOriginale: ev.note || "",
+      },
+    },
+  };
+  if (ev.tuttoIlGiorno !== false) {
+    body.start = { date: ev.data };
+    // Google richiede per gli eventi "tutto il giorno" che la fine sia il
+    // giorno DOPO (esclusivo) — anche per un evento di un solo giorno.
+    const fine = new Date(ev.data + "T00:00:00"); fine.setDate(fine.getDate() + 1);
+    body.end = { date: fine.toISOString().slice(0, 10) };
+  } else {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Zurich";
+    body.start = { dateTime: `${ev.data}T${ev.oraInizio || "09:00"}:00`, timeZone: tz };
+    body.end = { dateTime: `${ev.data}T${ev.oraFine || ev.oraInizio || "10:00"}:00`, timeZone: tz };
+  }
+  return body;
+}
+
+function googleAEventoApp(g) {
+  const priv = (g.extendedProperties && g.extendedProperties.private) || {};
+  const tuttoIlGiorno = !!(g.start && g.start.date);
+  let giocatoriIds = [];
+  try { giocatoriIds = JSON.parse(priv.giocatoriIds || "[]"); } catch (e) { giocatoriIds = []; }
+  return {
+    data: tuttoIlGiorno ? g.start.date : (g.start.dateTime || "").slice(0, 10),
+    tipo: priv.tipo || "Altro",
+    categoria: priv.categoria || "Scouting",
+    luogo: g.location || "",
+    note: priv.notaOriginale !== undefined ? priv.notaOriginale : (g.description || ""),
+    tuttoIlGiorno,
+    oraInizio: tuttoIlGiorno ? "" : (g.start.dateTime || "").slice(11, 16),
+    oraFine: tuttoIlGiorno ? "" : (g.end && g.end.dateTime ? g.end.dateTime.slice(11, 16) : ""),
+    giocatoriIds,
+    googleEventId: g.id,
+    googleUpdated: g.updated,
+  };
+}
+
+/* ---- Operazioni dirette (chiamate subito dopo salvataggio/eliminazione) ---- */
+async function pushEventoAGoogleSeConnesso(ev) {
+  if (!googleCal.connesso) return;
+  try {
+    await pushEventoAGoogle(ev);
+    savePlayers();
+  } catch (e) {
+    console.error("Sincronizzazione Google (salvataggio) non riuscita:", e);
+    googleCal.ultimoErrore = e.message;
+  }
+}
+async function eliminaEventoDaGoogleSeConnesso(googleEventId) {
+  if (!googleCal.connesso) return;
+  try {
+    const token = await assicuraTokenGoogleValido();
+    await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(googleCal.calendarId)}/events/${encodeURIComponent(googleEventId)}`, {
+      method: "DELETE",
+      headers: { Authorization: "Bearer " + token },
+    });
+  } catch (e) {
+    console.error("Eliminazione su Google non riuscita:", e);
+  }
+}
+async function pushEventoAGoogle(ev) {
+  const token = await assicuraTokenGoogleValido();
+  const body = eventoAGoogleBody(ev);
+  const url = ev.googleEventId
+    ? `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(googleCal.calendarId)}/events/${encodeURIComponent(ev.googleEventId)}`
+    : `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(googleCal.calendarId)}/events`;
+  const resp = await fetch(url, {
+    method: ev.googleEventId ? "PATCH" : "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) throw new Error("Google ha rifiutato l'evento (" + resp.status + ")");
+  const data = await resp.json();
+  ev.googleEventId = data.id;
+  ev.googleUpdated = data.updated;
+}
+
+/* ---- Sincronizzazione completa (pull + merge last-write-wins + push) ---- */
+async function sincronizzaOra(opzioni) {
+  opzioni = opzioni || {};
+  if (!googleCal.connesso) { alert("Collega prima Google Calendar da Strumenti."); return; }
+  googleCal.statoSync = "in corso";
+  renderStrumenti(document.getElementById("content"));
+  try {
+    const token = await assicuraTokenGoogleValido();
+
+    // 1) Scarica gli eventi Google (usa il syncToken se già presente, per
+    // prendere solo le variazioni; altrimenti scarica tutto il periodo
+    // utile: da 3 mesi fa a 12 mesi da oggi).
+    let googleEventi = [];
+    let url;
+    if (googleCal.syncToken && !opzioni.primaVolta) {
+      url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(googleCal.calendarId)}/events?syncToken=${encodeURIComponent(googleCal.syncToken)}&showDeleted=true`;
+    } else {
+      const min = new Date(); min.setMonth(min.getMonth() - 3);
+      const max = new Date(); max.setMonth(max.getMonth() + 12);
+      url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(googleCal.calendarId)}/events?timeMin=${min.toISOString()}&timeMax=${max.toISOString()}&singleEvents=true&showDeleted=true`;
+    }
+    let nextSyncToken = null;
+    while (url) {
+      const resp = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+      if (resp.status === 410) {
+        // syncToken scaduto/non valido: si riparte da una sincronizzazione completa
+        googleCal.syncToken = null;
+        return sincronizzaOra({ ...opzioni, primaVolta: true });
+      }
+      if (!resp.ok) throw new Error("Lettura eventi Google non riuscita (" + resp.status + ")");
+      const data = await resp.json();
+      googleEventi = googleEventi.concat(data.items || []);
+      if (data.nextSyncToken) nextSyncToken = data.nextSyncToken;
+      url = data.nextPageToken
+        ? `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(googleCal.calendarId)}/events?pageToken=${encodeURIComponent(data.nextPageToken)}`
+        : null;
+    }
+
+    // 2) Applica le modifiche/cancellazioni Google all'elenco locale
+    for (const g of googleEventi) {
+      const priv = (g.extendedProperties && g.extendedProperties.private) || {};
+      const locale = priv.scoutManagerId
+        ? eventi.find(e => e.id === priv.scoutManagerId)
+        : eventi.find(e => e.googleEventId === g.id);
+
+      if (g.status === "cancelled") {
+        if (locale) eventi = eventi.filter(e => e !== locale);
+        continue;
+      }
+      if (locale) {
+        const modificaLocalePiuRecente = locale.modificatoIl && new Date(locale.modificatoIl) > new Date(g.updated);
+        if (!modificaLocalePiuRecente) {
+          Object.assign(locale, googleAEventoApp(g), { modificatoIl: g.updated });
+        }
+        // se invece la modifica locale è più recente, la lasciamo stare:
+        // verrà ripubblicata su Google nel passo 3 qui sotto.
+      } else {
+        eventi.push({ id: uid(), giocatoriIds: [], ...googleAEventoApp(g), modificatoIl: g.updated });
+      }
+    }
+
+    // 3) Ripubblica su Google gli eventi locali nuovi o modificati più di
+    // recente rispetto a quanto sappiamo essere stato aggiornato su Google
+    // (compresi quelli appena creati, senza googleEventId).
+    if (opzioni.ancheEsportazione !== false) {
+      for (const ev of eventi) {
+        const maiSincronizzato = !ev.googleEventId;
+        const modificatoDopo = ev.googleEventId && ev.modificatoIl && (!ev.googleUpdated || new Date(ev.modificatoIl) > new Date(ev.googleUpdated));
+        if (maiSincronizzato || modificatoDopo) {
+          await pushEventoAGoogle(ev);
+        }
+      }
+    }
+
+    if (nextSyncToken) {
+      googleCal.syncToken = nextSyncToken;
+      await idbSet("google-sync-token", nextSyncToken);
+    }
+    googleCal.ultimaSync = new Date().toISOString();
+    await idbSet("google-ultima-sync", googleCal.ultimaSync);
+    googleCal.statoSync = "ok";
+    googleCal.ultimoErrore = null;
+  } catch (e) {
+    console.error(e);
+    googleCal.statoSync = "errore";
+    googleCal.ultimoErrore = e.message;
+  }
+  savePlayers();
+  render();
+}
+
+async function cambiaCalendarioGoogle() {
+  await mostraSceltaCalendarioGoogle();
+}
+
+function renderGoogleCalendarStatusHTML() {
+  if (!googleCal.connesso) {
+    return `
+      <div class="import-subsection">
+        <h3>Integrazione Google Calendar</h3>
+        <p class="muted">Collega un calendario Google (es. "Calcio") per sincronizzare gli eventi dell'app nei due sensi. Richiede che l'app sia aperta da un indirizzo web (non da file locale) e un Client ID ottenuto da Google Cloud Console.</p>
+        <label>Client ID Google
+          <input type="text" id="google-client-id-input" placeholder="xxxxxxxxxx.apps.googleusercontent.com" value="${esc(googleCal.clientId)}">
+        </label>
+        <div class="import-actions">
+          <button class="btn btn-primary" id="btn-collega-google">Collega Google Calendar</button>
+        </div>
+      </div>`;
+  }
+  const statoTesto = { "ok": "Sincronizzato", "in corso": "Sincronizzazione in corso…", "errore": "Errore", "inattivo": "Non ancora sincronizzato" }[googleCal.statoSync] || googleCal.statoSync;
+  return `
+    <div class="import-subsection">
+      <h3>Integrazione Google Calendar</h3>
+      <p><strong>Account:</strong> ${esc(googleCal.email)}</p>
+      <p><strong>Calendario collegato:</strong> ${esc(googleCal.calendarName)}</p>
+      <p><strong>Stato:</strong> ${esc(statoTesto)}</p>
+      <p><strong>Ultima sincronizzazione:</strong> ${googleCal.ultimaSync ? new Date(googleCal.ultimaSync).toLocaleString("it-IT") : "mai"}</p>
+      ${googleCal.ultimoErrore ? `<p style="color:var(--low);"><strong>Ultimo errore:</strong> ${esc(googleCal.ultimoErrore)}</p>` : ""}
+      <div class="import-actions">
+        <button class="btn btn-primary" id="btn-sincronizza-ora-google">Sincronizza ora</button>
+        <button class="btn btn-ghost" id="btn-cambia-calendario-google">Cambia calendario</button>
+        <button class="btn btn-ghost" id="btn-scollega-google">Scollega</button>
+      </div>
+    </div>`;
+}
+
+function wireGoogleCalendarStatusHTML(content) {
+  if (!googleCal.connesso) {
+    const btn = document.getElementById("btn-collega-google");
+    if (btn) btn.onclick = () => avviaConnessioneGoogle(document.getElementById("google-client-id-input").value);
+    return;
+  }
+  const btnSync = document.getElementById("btn-sincronizza-ora-google");
+  if (btnSync) btnSync.onclick = () => sincronizzaOra();
+  const btnCambia = document.getElementById("btn-cambia-calendario-google");
+  if (btnCambia) btnCambia.onclick = () => cambiaCalendarioGoogle();
+  const btnScollega = document.getElementById("btn-scollega-google");
+  if (btnScollega) btnScollega.onclick = () => disconnettiGoogle();
+}
+
 function renderDropboxStatusBar(stato, messaggioErrore) {
   const bar = document.getElementById("file-status-bar");
   if (!bar) return;
@@ -2191,6 +2669,13 @@ async function boot() {
   } catch (e) {
     console.error(e);
     renderDropboxStatusBar("errore", e.message);
+  }
+
+  try {
+    await caricaConfigGoogleSalvata();
+    await gestisciRitornoOAuthGoogle();
+  } catch (e) {
+    console.error("Google Calendar:", e);
   }
 
   render();
@@ -5496,6 +5981,8 @@ function renderStrumenti(content) {
         <div id="mnt-backup-result"></div>
       </div>
 
+      ${renderGoogleCalendarStatusHTML()}
+
       <div class="import-subsection">
         <h3>Riassunto AI</h3>
         <p class="muted">Per generare un riassunto automatico del profilo di un giocatore serve una chiave API. Le chiavi restano salvate solo su questo dispositivo/browser e parlano direttamente con il servizio scelto — non passano da nessun altro server.</p>
@@ -5706,6 +6193,7 @@ function renderStrumenti(content) {
 
   const notaBackupEl = document.getElementById("nota-backup-automatico");
   if (notaBackupEl) renderNotaBackupAutomatico(notaBackupEl);
+  wireGoogleCalendarStatusHTML(content);
   document.getElementById("mnt-btn-backup-ora").onclick = async () => {
     const risultato = document.getElementById("mnt-backup-result");
     if (!dropboxConnesso) { risultato.innerHTML = `<div class="import-result import-result-warn">Connettiti prima a Dropbox (in fondo alla pagina).</div>`; return; }
@@ -5882,6 +6370,18 @@ function renderCalendario(content) {
             <input type="text" id="cal-luogo" value="${esc(ev ? ev.luogo : "")}">
           </label>
         </div>
+        <div class="form-grid">
+          <label style="display:flex; align-items:center; gap:8px; flex-direction:row;">
+            <input type="checkbox" id="cal-tutto-giorno" ${!ev || ev.tuttoIlGiorno !== false ? "checked" : ""} style="width:auto;">
+            Evento per tutta la giornata
+          </label>
+          <label>Ora inizio
+            <input type="time" id="cal-ora-inizio" value="${esc(ev ? ev.oraInizio || "" : "")}">
+          </label>
+          <label>Ora fine
+            <input type="time" id="cal-ora-fine" value="${esc(ev ? ev.oraFine || "" : "")}">
+          </label>
+        </div>
         <label class="full">Note
           <textarea id="cal-note" rows="2">${esc(ev ? ev.note : "")}</textarea>
         </label>
@@ -5914,15 +6414,22 @@ function renderCalendario(content) {
     const categoria = document.getElementById("cal-categoria").value;
     const luogo = document.getElementById("cal-luogo").value.trim();
     const note = document.getElementById("cal-note").value.trim();
+    const tuttoIlGiorno = document.getElementById("cal-tutto-giorno").checked;
+    const oraInizio = tuttoIlGiorno ? "" : document.getElementById("cal-ora-inizio").value;
+    const oraFine = tuttoIlGiorno ? "" : document.getElementById("cal-ora-fine").value;
     if (!data) { alert("Inserisci una data per l'evento."); return; }
+    let eventoSalvato;
     if (ev) {
-      ev.data = data; ev.tipo = tipo; ev.categoria = categoria; ev.luogo = luogo; ev.note = note;
+      Object.assign(ev, { data, tipo, categoria, luogo, note, tuttoIlGiorno, oraInizio, oraFine, modificatoIl: new Date().toISOString() });
+      eventoSalvato = ev;
     } else {
-      eventi.push({ id: uid(), data, tipo, categoria, luogo, note, giocatoriIds: [] });
+      eventoSalvato = { id: uid(), data, tipo, categoria, luogo, note, tuttoIlGiorno, oraInizio, oraFine, giocatoriIds: [], modificatoIl: new Date().toISOString(), googleEventId: null, googleUpdated: null };
+      eventi.push(eventoSalvato);
     }
     calEventoInModifica = null;
     savePlayers();
     renderCalendario(content);
+    pushEventoAGoogleSeConnesso(eventoSalvato);
   };
   if (document.getElementById("btn-annulla-modifica-evento")) {
     document.getElementById("btn-annulla-modifica-evento").onclick = () => {
@@ -5937,9 +6444,11 @@ function renderCalendario(content) {
   content.querySelectorAll("[data-elimina-evento]").forEach(btn => {
     btn.onclick = () => {
       if (!confirm("Eliminare questo evento dal calendario?")) return;
+      const evento = eventi.find(e => e.id === btn.dataset.eliminaEvento);
       eventi = eventi.filter(e => e.id !== btn.dataset.eliminaEvento);
       savePlayers();
       renderCalendario(content);
+      if (evento && evento.googleEventId) eliminaEventoDaGoogleSeConnesso(evento.googleEventId);
     };
   });
   content.querySelectorAll("[data-rimuovi-giocatore-evento]").forEach(btn => {
@@ -5981,7 +6490,7 @@ function calEventoCardHTML(e) {
   return `
     <div class="candidato-card">
       <div class="candidato-card-header">
-        <strong class="mono">${formatDataIt(e.data)}</strong> — ${esc(e.tipo || "Evento")}${e.luogo ? " — " + esc(e.luogo) : ""}
+        <strong class="mono">${formatDataIt(e.data)}</strong>${(!e.tuttoIlGiorno && e.oraInizio) ? ` <span class="mono">${esc(e.oraInizio)}${e.oraFine ? "–" + esc(e.oraFine) : ""}</span>` : ""} — ${esc(e.tipo || "Evento")}${e.luogo ? " — " + esc(e.luogo) : ""}
         <span class="chip" style="margin-left:8px; ${categoria === "Convocazione" ? "border-color: var(--info); color: var(--info);" : ""}">${categoria}</span>
         <div class="import-actions">
           <button class="btn btn-ghost btn-sm" data-modifica-evento="${e.id}">Modifica</button>
