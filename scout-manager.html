@@ -3511,7 +3511,7 @@ function apriDettaglio(id) {
             <ul class="modal-list">
               ${convocazioni.map(e => {
                 const categoria = e.categoria || "Scouting";
-                return `<li><span class="mono">${formatDataIt(e.data)}</span> — ${esc(e.tipo || "Evento")}${e.luogo ? " — " + esc(e.luogo) : ""} <span class="chip" style="margin-left:4px; font-size:10.5px; ${categoria === "Convocazione" ? "border-color: var(--info); color: var(--info);" : ""}">${categoria}</span></li>`;
+                return `<li><span class="mono">${formatDataIt(e.data)}</span>${(e.tipo && e.tipo !== "Altro") ? " — " + esc(e.tipo) : ""}${e.luogo ? " — " + esc(e.luogo) : ""} <span class="chip" style="margin-left:4px; font-size:10.5px; ${categoria === "Convocazione" ? "border-color: var(--info); color: var(--info);" : ""}">${categoria}</span></li>`;
               }).join("")}
             </ul>
           </div>`;
@@ -6521,7 +6521,7 @@ function calEventoCardHTML(e) {
   return `
     <div class="candidato-card">
       <div class="candidato-card-header">
-        <strong class="mono">${formatDataIt(e.data)}</strong>${(!e.tuttoIlGiorno && e.oraInizio) ? ` <span class="mono">${esc(e.oraInizio)}${e.oraFine ? "–" + esc(e.oraFine) : ""}</span>` : ""} — ${esc(e.tipo || "Evento")}${e.luogo ? " — " + esc(e.luogo) : ""}
+        <strong class="mono">${formatDataIt(e.data)}</strong>${(!e.tuttoIlGiorno && e.oraInizio) ? ` <span class="mono">${esc(e.oraInizio)}${e.oraFine ? "–" + esc(e.oraFine) : ""}</span>` : ""}${(e.tipo && e.tipo !== "Altro") ? " — " + esc(e.tipo) : ""}${e.luogo ? " — " + esc(e.luogo) : ""}
         <span class="chip" style="margin-left:8px; ${categoria === "Convocazione" ? "border-color: var(--info); color: var(--info);" : ""}">${categoria}</span>
         <div class="import-actions">
           <button class="btn btn-ghost btn-sm" data-modifica-evento="${e.id}">Modifica</button>
