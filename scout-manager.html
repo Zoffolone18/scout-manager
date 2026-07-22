@@ -1326,14 +1326,89 @@ let raduni = [];
 // bisogno di modifiche manuali.
 function parseDatabaseJSON(text) {
   const parsed = text && text.trim() ? JSON.parse(text) : [];
-  if (Array.isArray(parsed)) return { players: parsed, eventi: [], raduni: [] };
-  return { players: parsed.players || [], eventi: parsed.eventi || [], raduni: parsed.raduni || [] };
+  const risultato = Array.isArray(parsed)
+    ? { players: parsed, eventi: [], raduni: [] }
+    : { players: parsed.players || [], eventi: parsed.eventi || [], raduni: parsed.raduni || [] };
+  migraTuttiSquadraCategorie(risultato.players);
+  return risultato;
+}
+
+// Elenco fisso delle categorie selezionabili per un giocatore (chips nella
+// scheda, come le Etichette). "categoria" nel resto del codice, quando si
+// parla del campo libero digitato nel Calendario, resta invece il NUMERO
+// estratto dal testo (es. "21"): questa mappa converte quel numero
+// nell'etichetta fissa corrispondente (es. "U21").
+const CATEGORIE_FISSE = ["U14", "U15", "U16", "U17", "U18", "U19", "U21", "Prima Squadra"];
+const CATEGORIA_NUMERO_A_LABEL = { "14": "U14", "15": "U15", "16": "U16", "17": "U17", "18": "U18", "19": "U19", "21": "U21" };
+
+// Rimuove SOLO un token di categoria età (U21, U-21, M15, ecc.) da un testo,
+// lasciando intatto tutto il resto — comprese sigle come "1893" che fanno
+// parte del nome ufficiale del club (es. "FC Basel 1893"). Confronta
+// l'INTERO token separato da spazi, non una sottostringa: così un testo
+// come "SFV/ASF u/m-15 - StüPu" (dove "u/m-15" non è un token isolato, ma
+// parte di una sigla più larga da sistemare a mano) resta intoccato invece
+// di venire rovinato da un taglio a metà.
+function rimuoviCategoriaDaTesto(raw) {
+  const testo = String(raw || "");
+  if (!testo.trim()) return { pulito: testo, categoria: null };
+  let categoria = null;
+  const parole = testo.split(/\s+/).filter(tk => {
+    if (categoria) return true;
+    const m = tk.match(/^[UuMm]-?(\d{2})$/);
+    if (m && CATEGORIA_NUMERO_A_LABEL[m[1]]) { categoria = m[1]; return false; }
+    return true;
+  });
+  return { pulito: parole.join(" ").trim(), categoria };
+}
+
+// Migrazione una tantum, per-giocatore e idempotente (grazie al flag
+// squadraCategorieMigrata: una volta fatta non viene rifatta, anche se poi
+// modifichi a mano il campo Squadra): scompone lo storico campo "Squadra" —
+// che finora conteneva club+categoria insieme, es. "FC Lugano U-21" — nei
+// due campi separati "squadra" (solo il club, es. "FC Lugano") e
+// "categorie" (elenco fisso, es. ["U21"]). Recupera anche le eventuali
+// "squadreAggiuntive" di una versione precedente dell'app: se indicano solo
+// un'altra categoria per lo stesso club la aggiunge alle categorie; se
+// sembrano indicare un club diverso, non la perde silenziosamente ma la
+// segnala in nota per una verifica manuale.
+function migraSquadraCategorie(p) {
+  if (!p || p.squadraCategorieMigrata) return;
+  const categorie = new Set(p.categorie || []);
+  let squadraPulita = p.squadra || "";
+  const noteExtra = [];
+
+  if (p.squadra) {
+    const r = rimuoviCategoriaDaTesto(p.squadra);
+    squadraPulita = r.pulito || p.squadra;
+    if (r.categoria) categorie.add(CATEGORIA_NUMERO_A_LABEL[r.categoria]);
+  }
+
+  (p.squadreAggiuntive || []).forEach(testo => {
+    const r = rimuoviCategoriaDaTesto(testo);
+    if (r.categoria) {
+      categorie.add(CATEGORIA_NUMERO_A_LABEL[r.categoria]);
+    } else if (r.pulito && r.pulito.toLowerCase() !== squadraPulita.toLowerCase()) {
+      noteExtra.push(`Squadra aggiuntiva da rivedere (migrazione automatica campo Categorie): ${testo}`);
+    }
+  });
+
+  p.squadra = squadraPulita;
+  p.categorie = [...categorie];
+  delete p.squadreAggiuntive;
+  if (noteExtra.length) p.note = (p.note ? p.note + "\n\n" : "") + noteExtra.join("\n");
+  p.squadraCategorieMigrata = true;
+}
+
+function migraTuttiSquadraCategorie(playersArr) {
+  (playersArr || []).forEach(migraSquadraCategorie);
+  return playersArr;
 }
 let currentTab = "elenco";
 
 let filtroTesto = "";
 let filtroAnno = "tutti";
 let filtroSquadra = "tutte";
+let filtroCategoria = "tutte";
 let filtroRuolo = "tutti";
 let filtroParametro = "tutti";
 let filtroValoreMin = "";
@@ -2753,6 +2828,7 @@ function switchTab(tab, editPlayer) {
 }
 
 function render(editPlayer) {
+  migraTuttiSquadraCategorie(players);
   const content = document.getElementById("content");
   if (currentTab === "elenco") renderElenco(content);
   else if (currentTab === "nuova") renderForm(content, editPlayer || null);
@@ -2803,6 +2879,10 @@ function renderElenco(content) {
       <select id="f-squadra" class="f-input">
         <option value="tutte">Tutte le squadre</option>
         ${squadre.map(s => `<option value="${esc(s)}" ${filtroSquadra === s ? "selected" : ""}>${esc(s)}</option>`).join("")}
+      </select>
+      <select id="f-categoria" class="f-input">
+        <option value="tutte">Tutte le categorie</option>
+        ${CATEGORIE_FISSE.map(c => `<option value="${esc(c)}" ${filtroCategoria === c ? "selected" : ""}>${esc(c)}</option>`).join("")}
       </select>
       <select id="f-ruolo" class="f-input">
         <option value="tutti">Tutti i ruoli</option>
@@ -2861,6 +2941,7 @@ function renderElenco(content) {
   document.getElementById("f-testo").oninput = e => { filtroTesto = e.target.value; renderRisultati(); };
   document.getElementById("f-anno").onchange = e => { filtroAnno = e.target.value; renderRisultati(); };
   document.getElementById("f-squadra").onchange = e => { filtroSquadra = e.target.value; renderRisultati(); };
+  document.getElementById("f-categoria").onchange = e => { filtroCategoria = e.target.value; renderRisultati(); };
   document.getElementById("f-ruolo").onchange = e => { filtroRuolo = e.target.value; renderRisultati(); };
   document.getElementById("f-parametro").onchange = e => {
     filtroParametro = e.target.value;
@@ -2870,7 +2951,7 @@ function renderElenco(content) {
   document.getElementById("f-valoremin").oninput = e => { filtroValoreMin = e.target.value; renderRisultati(); };
   document.getElementById("f-ordine").onchange = e => { ordinamento = e.target.value; renderRisultati(); };
   document.getElementById("btn-reset-filtri").onclick = () => {
-    filtroTesto = ""; filtroAnno = "tutti"; filtroSquadra = "tutte";
+    filtroTesto = ""; filtroAnno = "tutti"; filtroSquadra = "tutte"; filtroCategoria = "tutte";
     filtroRuolo = "tutti"; filtroParametro = "tutti"; filtroValoreMin = ""; ordinamento = "cognome";
     filtroEtichette = new Set(); filtroScouts = new Set();
     renderElenco(content);
@@ -2903,7 +2984,7 @@ function renderRisultati() {
   let filtered = players.filter(p => {
     if (filtroTesto) {
       const t = filtroTesto.toLowerCase();
-      const hay = `${p.cognome || ""} ${p.nome || ""} ${p.squadra || ""}`.toLowerCase();
+      const hay = `${p.cognome || ""} ${p.nome || ""} ${p.squadra || ""} ${(p.categorie || []).join(" ")}`.toLowerCase();
       if (!hay.includes(t)) return false;
     }
     if (filtroAnno !== "tutti") {
@@ -2911,6 +2992,7 @@ function renderRisultati() {
       if (String(anno) !== filtroAnno) return false;
     }
     if (filtroSquadra !== "tutte" && p.squadra !== filtroSquadra) return false;
+    if (filtroCategoria !== "tutte" && !(p.categorie || []).includes(filtroCategoria)) return false;
     if (filtroRuolo !== "tutti" && p.ruoloPrimario !== filtroRuolo && p.ruoloSecondario !== filtroRuolo) return false;
     if (filtroEtichette.size > 0) {
       const etichetteGiocatore = p.etichette || [];
@@ -3050,7 +3132,7 @@ function tabellaRigaHTML(p, scoutFilter) {
       <td>${categoriaNazionale(p.dataNascita) || "-"}</td>
       <td class="mono">${(p.etaBiologica !== undefined && p.etaBiologica !== null && p.etaBiologica !== "") ? esc(p.etaBiologica) : "-"}</td>
       <td>${esc(p.ruoloPrimario || "-")}</td>
-      <td>${p.squadra || (p.squadreAggiuntive && p.squadreAggiuntive.length) ? squadraConAggiuntive(p) : "-"}</td>
+      <td>${p.squadra || (p.categorie && p.categorie.length) ? squadraConCategorie(p) : "-"}</td>
       <td>${etichette.length ? etichette.map(e => `<span class="etichetta-badge">${esc(e)}</span>`).join(" ") : "-"}</td>
       ${ordinamento === "modificati" ? `<td class="mono">${formatDataIt(p.modificatoIl || p.creatoIl)}${(p.ultimeSezioniModificate && p.ultimeSezioniModificate.length) ? `<br><span class="muted" style="font-size:11px;">${esc(p.ultimeSezioniModificate.join(", "))}</span>` : ""}</td>` : ""}
       ${ordinamento === "ultimaPartita" ? `<td class="${(() => { const g = giorniDaOggi(dataUltimaPartita(p)); return g !== null && g >= 0 && g <= 6 ? "ultima-partita-recente" : ""; })()}">${esc(testoUltimaPartita(p))}</td>` : ""}
@@ -3073,15 +3155,14 @@ function apriFotoIngrandita(url) {
 
 const SILHOUETTE_SVG = '<svg viewBox="0 0 64 64" width="100%" height="100%"><circle cx="32" cy="24" r="12" fill="none" stroke="currentColor" stroke-width="3"/><path d="M12 56c2-14 12-20 20-20s18 6 20 20" fill="none" stroke="currentColor" stroke-width="3"/></svg>';
 
-// Testo compatto "squadra principale + eventuali altre squadre" per le
-// visualizzazioni in elenco/scheda: un giocatore può essere assegnato a più
-// squadre (es. gioca sia in FC Lugano U19 che in FC Lugano U21) tramite il
-// campo squadreAggiuntive, mentre "squadra" resta il campo principale usato
-// per l'ordinamento e i filtri dell'Elenco.
-function squadraConAggiuntive(p) {
-  const extra = (p.squadreAggiuntive || []).filter(Boolean);
-  if (!extra.length) return esc(p.squadra || "");
-  return `${esc(p.squadra || "—")} <span class="muted">· anche ${extra.map(esc).join(", ")}</span>`;
+// Testo compatto "squadra (club) + categorie" per le visualizzazioni in
+// elenco/scheda: un giocatore ha UNA società (campo squadra, usato per
+// ordinamento e filtro squadra dell'Elenco) e può avere PIÙ categorie
+// (es. gioca sia in U19 che in U21 della stessa società FC Lugano).
+function squadraConCategorie(p) {
+  const cat = (p.categorie || []).filter(Boolean);
+  if (!cat.length) return esc(p.squadra || "");
+  return `${esc(p.squadra || "—")} <span class="muted">· ${cat.map(esc).join(", ")}</span>`;
 }
 
 function cardHTML(p, scoutFilter) {
@@ -3099,7 +3180,7 @@ function cardHTML(p, scoutFilter) {
           <div class="card-name">${esc(p.cognome)} <span class="card-name-nome">${esc(p.nome)}</span></div>
           <div class="card-meta">
             ${p.dataNascita ? `<div class="card-meta-line">${formatDataIt(p.dataNascita)}${eta !== null ? " (" + eta + " anni)" : ""}</div>` : ""}
-            <div class="card-meta-line">${p.squadra || (p.squadreAggiuntive && p.squadreAggiuntive.length) ? squadraConAggiuntive(p) : "Squadra n.d."}</div>
+            <div class="card-meta-line">${p.squadra || (p.categorie && p.categorie.length) ? squadraConCategorie(p) : "Squadra n.d."}</div>
             ${categoriaNazionale(p.dataNascita) ? `<div class="card-meta-line">Categoria ${categoriaNazionale(p.dataNascita)}</div>` : ""}
             ${(p.etaBiologica !== undefined && p.etaBiologica !== null && p.etaBiologica !== "") ? `<div class="card-meta-line">BioAlter ${esc(p.etaBiologica)}</div>` : ""}
             ${ordinamento === "modificati" ? `<div class="card-meta-line">Modificato il ${formatDataIt(p.modificatoIl || p.creatoIl)}</div>` : ""}
@@ -3422,6 +3503,7 @@ function apriModalImportazione() {
 function apriDettaglio(id) {
   const p = players.find(pl => pl.id === id);
   if (!p) return;
+  migraSquadraCategorie(p);
   const root = document.getElementById("modal-root");
   const media = valutazioneMedia(p, filtroScouts);
   const eta = calcolaEta(p.dataNascita);
@@ -3530,7 +3612,7 @@ function apriDettaglio(id) {
           <div class="modal-photo ${p.foto ? "modal-photo-clickable" : ""}" id="modal-photo-el">${p.foto ? `<img src="${esc(p.foto)}" alt="">` : SILHOUETTE_SVG}</div>
           <div>
             <h2>${esc(p.cognome)} <span class="card-name-nome">${esc(p.nome)}</span></h2>
-            <div class="card-meta">${p.squadra || (p.squadreAggiuntive && p.squadreAggiuntive.length) ? squadraConAggiuntive(p) : "Squadra n.d."} ${eta !== null ? "· " + eta + " anni · nato il " + formatDataIt(p.dataNascita) : ""} ${categoriaNazionale(p.dataNascita) ? "· Categoria " + categoriaNazionale(p.dataNascita) : ""}</div>
+            <div class="card-meta">${p.squadra || (p.categorie && p.categorie.length) ? squadraConCategorie(p) : "Squadra n.d."} ${eta !== null ? "· " + eta + " anni · nato il " + formatDataIt(p.dataNascita) : ""} ${categoriaNazionale(p.dataNascita) ? "· Categoria " + categoriaNazionale(p.dataNascita) : ""}</div>
             <div class="card-ruoli">
               ${p.ruoloPrimario ? `<span class="tag tag-primario">${esc(p.ruoloPrimario)}</span>` : ""}
               ${p.ruoloSecondario ? `<span class="tag tag-secondario">${esc(p.ruoloSecondario)}</span>` : ""}
@@ -3930,6 +4012,7 @@ function ridimensionaImmagine(file, maxLato, qualita) {
 }
 
 function renderForm(content, p) {
+  if (p) migraSquadraCategorie(p);
   const squadre = [...new Set(players.map(pl => pl.squadra).filter(Boolean))].sort();
   const etichetteUsatePerGiocatori = [...new Set(players.flatMap(pl => pl.etichette || []))];
   const etichetteExtraForm = etichetteUsatePerGiocatori.filter(e => !ETICHETTE_DEFAULT.includes(e)).sort();
@@ -3938,7 +4021,7 @@ function renderForm(content, p) {
     players.flatMap(pl => (pl.valutazioni || []).map(v => v.scout)).filter(Boolean)
   )].sort();
   const etichetteSelezionate = new Set(p && p.etichette ? p.etichette : []);
-  const squadreExtraSelezionate = new Set(p && p.squadreAggiuntive ? p.squadreAggiuntive : []);
+  const categorieSelezionate = new Set(p && p.categorie ? p.categorie : []);
 
   content.innerHTML = `
     <form id="player-form" class="player-form">
@@ -4011,13 +4094,9 @@ function renderForm(content, p) {
       </div>
 
       <div class="dyn-section">
-        <div class="dyn-section-header"><h3>Altre squadre <span class="muted" style="font-weight:400; text-transform:none; letter-spacing:normal;">(se il giocatore gioca anche in un'altra categoria/squadra, es. sia U19 che U21)</span></h3></div>
-        <div class="chips-group" id="fp-squadre-extra-chips">
-          ${squadre.map(s => `<button type="button" class="chip ${squadreExtraSelezionate.has(s) ? "chip-active" : ""}" data-val="${esc(s)}">${esc(s)}</button>`).join("")}
-        </div>
-        <div class="etichetta-add-row">
-          <input type="text" id="fp-nuova-squadra-extra" placeholder="Aggiungi un'altra squadra">
-          <button type="button" class="btn btn-ghost btn-sm" id="btn-add-squadra-extra">+ Aggiungi</button>
+        <div class="dyn-section-header"><h3>Categorie <span class="muted" style="font-weight:400; text-transform:none; letter-spacing:normal;">(se il giocatore gioca in più categorie della stessa società, es. sia U19 che U21)</span></h3></div>
+        <div class="chips-group" id="fp-categorie-chips">
+          ${CATEGORIE_FISSE.map(c => `<button type="button" class="chip ${categorieSelezionate.has(c) ? "chip-active" : ""}" data-val="${esc(c)}">${esc(c)}</button>`).join("")}
         </div>
       </div>
 
@@ -4171,28 +4250,9 @@ function renderForm(content, p) {
     input.value = "";
   };
 
-  document.querySelectorAll("#fp-squadre-extra-chips .chip").forEach(chip => {
+  document.querySelectorAll("#fp-categorie-chips .chip").forEach(chip => {
     chip.onclick = () => chip.classList.toggle("chip-active");
   });
-  document.getElementById("btn-add-squadra-extra").onclick = () => {
-    const input = document.getElementById("fp-nuova-squadra-extra");
-    const val = input.value.trim();
-    if (!val) return;
-    const chipsGroup = document.getElementById("fp-squadre-extra-chips");
-    const esistente = [...chipsGroup.querySelectorAll(".chip")].find(c => c.dataset.val.toLowerCase() === val.toLowerCase());
-    if (esistente) {
-      esistente.classList.add("chip-active");
-    } else {
-      const chip = document.createElement("button");
-      chip.type = "button";
-      chip.className = "chip chip-active";
-      chip.dataset.val = val;
-      chip.textContent = val;
-      chip.onclick = () => chip.classList.toggle("chip-active");
-      chipsGroup.appendChild(chip);
-    }
-    input.value = "";
-  };
 
   document.getElementById("player-form").onsubmit = e => {
     e.preventDefault();
@@ -4298,7 +4358,7 @@ function salvaForm(existingId, foto) {
   });
 
   const etichette = [...document.querySelectorAll("#fp-etichette-chips .chip.chip-active")].map(c => c.dataset.val);
-  const squadreAggiuntive = [...document.querySelectorAll("#fp-squadre-extra-chips .chip.chip-active")].map(c => c.dataset.val);
+  const categorie = [...document.querySelectorAll("#fp-categorie-chips .chip.chip-active")].map(c => c.dataset.val);
   const vecchioPlayer = existingId ? players.find(pl => pl.id === existingId) : null;
 
   // Traccia due date separate: "modificatoIl" scatta ad ogni salvataggio della
@@ -4335,7 +4395,7 @@ function salvaForm(existingId, foto) {
     if (notaCambiata) sezioniModificate.push("Note");
     if (diversi(misurazioni, vecchioPlayer.misurazioni || [])) sezioniModificate.push("Dati fisici");
     if (diversi(etichette, vecchioPlayer.etichette || [])) sezioniModificate.push("Etichette");
-    if (diversi(squadreAggiuntive, vecchioPlayer.squadreAggiuntive || [])) sezioniModificate.push("Altre squadre");
+    if (diversi(categorie, vecchioPlayer.categorie || [])) sezioniModificate.push("Categorie");
     if (diversi(visionature, vecchioPlayer.visionature || [])) sezioniModificate.push("Visionature");
     if (diversi(valutazioni, vecchioPlayer.valutazioni || [])) sezioniModificate.push("Valutazioni");
     if (diversi(trasferimenti, vecchioPlayer.trasferimenti || [])) sezioniModificate.push("Trasferimenti");
@@ -4355,7 +4415,8 @@ function salvaForm(existingId, foto) {
     nome,
     dataNascita: document.getElementById("fp-datanascita").value,
     squadra: document.getElementById("fp-squadra").value.trim(),
-    squadreAggiuntive,
+    categorie,
+    squadraCategorieMigrata: true,
     ruoloPrimario: document.getElementById("fp-ruoloprimario").value.trim(),
     ruoloSecondario: document.getElementById("fp-ruolosecondario").value.trim(),
     piedePreferito: document.getElementById("fp-piedepreferito").value,
@@ -6650,24 +6711,20 @@ function squadreCoerenti(coreA, coreB) {
   return [...piccolo].every(w => grande.has(w));
 }
 
-// Tutte le squadre di un giocatore: quella principale ("squadra") più le
-// eventuali altre assegnate a mano (squadreAggiuntive, es. un giocatore che
-// gioca sia in U19 che in U21) — un giocatore compare tra i probabili se
-// ALMENO UNA delle sue squadre corrisponde al testo cercato.
-function squadreDelGiocatore(p) {
-  return [p.squadra, ...(p.squadreAggiuntive || [])].filter(Boolean);
-}
-
-// Cerca tra tutti i giocatori quelli con almeno una squadra (principale o
-// aggiuntiva) che corrisponde al testo passato (tipicamente una delle due
-// metà del campo "luogo" di un evento). Se il testo indica una categoria
-// (U21, M-21, ecc.) vengono prese solo le squadre di quella categoria; se
-// non la indica, vengono prese tutte le categorie del club. Un "core" troppo
-// corto (meno di 3 caratteri, es. testo vuoto o solo sigle) viene
-// considerato non riconosciuto per evitare falsi positivi.
+// Cerca tra tutti i giocatori quelli la cui squadra (societè) corrisponde al
+// testo passato (tipicamente una delle due metà del campo "luogo" di un
+// evento), incrociando anche le Categorie assegnate al giocatore: se il
+// testo indica una categoria (U21, M-21, ecc.) vengono presi solo i
+// giocatori che hanno quella categoria tra le proprie; se non la indica,
+// vengono presi tutti i giocatori del club a prescindere dalla categoria —
+// così un giocatore con più categorie (es. sia U19 che U21) compare in
+// entrambi i casi. Un "core" troppo corto (meno di 3 caratteri, es. testo
+// vuoto o solo sigle) viene considerato non riconosciuto per evitare falsi
+// positivi.
 function trovaGiocatoriPerSquadra(testoRicerca) {
   const ric = analizzaNomeSquadra(testoRicerca);
   if (!ric.core || ric.core.length < 3) return { riconosciuta: false, giocatori: [] };
+  const categoriaRichiesta = ric.categoria ? CATEGORIA_NUMERO_A_LABEL[ric.categoria] : null;
   // "riconosciuta" indica che il testo corrisponde a un club presente nel
   // database (a prescindere dalla categoria): serve a distinguere un vero
   // nome di squadra senza giocatori scoutati di quella categoria (mostra
@@ -6675,12 +6732,12 @@ function trovaGiocatoriPerSquadra(testoRicerca) {
   // affatto un nome di club, es. una nota personale (non mostra la colonna).
   let clubTrovato = false;
   const trovati = players.filter(p => {
-    return squadreDelGiocatore(p).some(nomeSquadra => {
-      const ps = analizzaNomeSquadra(nomeSquadra);
-      if (!ps.core || !squadreCoerenti(ric.core, ps.core)) return false;
-      clubTrovato = true;
-      return ric.categoria ? ps.categoria === ric.categoria : true;
-    });
+    if (!p.squadra) return false;
+    const ps = analizzaNomeSquadra(p.squadra);
+    if (!ps.core || !squadreCoerenti(ric.core, ps.core)) return false;
+    clubTrovato = true;
+    if (!categoriaRichiesta) return true;
+    return (p.categorie || []).includes(categoriaRichiesta);
   });
   trovati.sort((a, b) => `${a.cognome} ${a.nome}`.localeCompare(`${b.cognome} ${b.nome}`, "it"));
   return { riconosciuta: clubTrovato, giocatori: trovati };
