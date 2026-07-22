@@ -2301,13 +2301,14 @@ function eventoAGoogleBody(ev) {
   if (ev.tuttoIlGiorno !== false) {
     body.start = { date: ev.data };
     // Google richiede per gli eventi "tutto il giorno" che la fine sia il
-    // giorno DOPO (esclusivo) — anche per un evento di un solo giorno.
-    const fine = new Date(ev.data + "T00:00:00"); fine.setDate(fine.getDate() + 1);
+    // giorno DOPO (esclusivo) — sia per un evento di un solo giorno sia
+    // per uno su più giorni (usiamo dataFine se presente, altrimenti data).
+    const fine = new Date((ev.dataFine || ev.data) + "T00:00:00"); fine.setDate(fine.getDate() + 1);
     body.end = { date: fine.toISOString().slice(0, 10) };
   } else {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Zurich";
     body.start = { dateTime: `${ev.data}T${ev.oraInizio || "09:00"}:00`, timeZone: tz };
-    body.end = { dateTime: `${ev.data}T${ev.oraFine || ev.oraInizio || "10:00"}:00`, timeZone: tz };
+    body.end = { dateTime: `${ev.dataFine || ev.data}T${ev.oraFine || ev.oraInizio || "10:00"}:00`, timeZone: tz };
   }
   return body;
 }
@@ -2331,8 +2332,24 @@ function googleAEventoApp(g) {
     else note = g.summary + (note ? "\n\n" + note : "");
   }
 
+  // Estrae la data di fine reale, se l'evento dura più di un giorno.
+  // Per gli eventi "tutto il giorno" Google usa una fine ESCLUSIVA (il
+  // giorno dopo l'ultimo vero giorno), va quindi corretta di un giorno
+  // indietro prima di confrontarla con la data di inizio.
+  let dataFine = "";
+  if (tuttoIlGiorno && g.end && g.end.date) {
+    const fineEsclusiva = new Date(g.end.date + "T00:00:00");
+    fineEsclusiva.setDate(fineEsclusiva.getDate() - 1);
+    const fineReale = fineEsclusiva.toISOString().slice(0, 10);
+    if (fineReale !== g.start.date) dataFine = fineReale;
+  } else if (!tuttoIlGiorno && g.end && g.end.dateTime) {
+    const fineReale = g.end.dateTime.slice(0, 10);
+    if (fineReale !== (g.start.dateTime || "").slice(0, 10)) dataFine = fineReale;
+  }
+
   return {
     data: tuttoIlGiorno ? g.start.date : (g.start.dateTime || "").slice(0, 10),
+    dataFine,
     tipo: priv.tipo || "Altro",
     categoria: priv.categoria || "Scouting",
     luogo,
@@ -6386,6 +6403,9 @@ function renderCalendario(content) {
           <label>Data
             <input type="date" id="cal-data" value="${esc(ev ? ev.data : "")}">
           </label>
+          <label>Data fine <span class="muted" style="font-weight:400;">(solo se dura più giorni)</span>
+            <input type="date" id="cal-data-fine" value="${esc(ev ? ev.dataFine || "" : "")}">
+          </label>
           <label>Tipo
             <select id="cal-tipo">
               ${["Partita", "Raduno", "Torneo", "Allenamento", "Altro"].map(t => `<option value="${t}" ${ev && ev.tipo === t ? "selected" : ""}>${t}</option>`).join("")}
@@ -6441,6 +6461,7 @@ function renderCalendario(content) {
 
   document.getElementById("btn-salva-evento").onclick = () => {
     const data = document.getElementById("cal-data").value;
+    const dataFine = document.getElementById("cal-data-fine").value || "";
     const tipo = document.getElementById("cal-tipo").value;
     const categoria = document.getElementById("cal-categoria").value;
     const luogo = document.getElementById("cal-luogo").value.trim();
@@ -6449,12 +6470,13 @@ function renderCalendario(content) {
     const oraInizio = tuttoIlGiorno ? "" : document.getElementById("cal-ora-inizio").value;
     const oraFine = tuttoIlGiorno ? "" : document.getElementById("cal-ora-fine").value;
     if (!data) { alert("Inserisci una data per l'evento."); return; }
+    if (dataFine && dataFine < data) { alert("La data di fine non può essere prima della data di inizio."); return; }
     let eventoSalvato;
     if (ev) {
-      Object.assign(ev, { data, tipo, categoria, luogo, note, tuttoIlGiorno, oraInizio, oraFine, modificatoIl: new Date().toISOString() });
+      Object.assign(ev, { data, dataFine, tipo, categoria, luogo, note, tuttoIlGiorno, oraInizio, oraFine, modificatoIl: new Date().toISOString() });
       eventoSalvato = ev;
     } else {
-      eventoSalvato = { id: uid(), data, tipo, categoria, luogo, note, tuttoIlGiorno, oraInizio, oraFine, giocatoriIds: [], modificatoIl: new Date().toISOString(), googleEventId: null, googleUpdated: null };
+      eventoSalvato = { id: uid(), data, dataFine, tipo, categoria, luogo, note, tuttoIlGiorno, oraInizio, oraFine, giocatoriIds: [], modificatoIl: new Date().toISOString(), googleEventId: null, googleUpdated: null };
       eventi.push(eventoSalvato);
     }
     calEventoInModifica = null;
@@ -6521,7 +6543,7 @@ function calEventoCardHTML(e) {
   return `
     <div class="candidato-card">
       <div class="candidato-card-header">
-        <strong class="mono">${formatDataIt(e.data)}</strong>${(!e.tuttoIlGiorno && e.oraInizio) ? ` <span class="mono">${esc(e.oraInizio)}${e.oraFine ? "–" + esc(e.oraFine) : ""}</span>` : ""}${(e.tipo && e.tipo !== "Altro") ? " — " + esc(e.tipo) : ""}${e.luogo ? " — " + esc(e.luogo) : ""}
+        <strong class="mono">${formatDataIt(e.data)}${(e.dataFine && e.dataFine !== e.data) ? " → " + formatDataIt(e.dataFine) : ""}</strong>${(!e.tuttoIlGiorno && e.oraInizio) ? ` <span class="mono">${esc(e.oraInizio)}${e.oraFine ? "–" + esc(e.oraFine) : ""}</span>` : ""}${(e.tipo && e.tipo !== "Altro") ? " — " + esc(e.tipo) : ""}${e.luogo ? " — " + esc(e.luogo) : ""}
         <span class="chip" style="margin-left:8px; ${categoria === "Convocazione" ? "border-color: var(--info); color: var(--info);" : ""}">${categoria}</span>
         <div class="import-actions">
           <button class="btn btn-ghost btn-sm" data-modifica-evento="${e.id}">Modifica</button>
