@@ -1366,6 +1366,23 @@ function dataOggiLocale() {
   return `${d.getFullYear()}-${mm}-${gg}`;
 }
 
+// Somma (o sottrae, con giorni negativo) un numero di giorni a una data
+// ISO "AAAA-MM-GG" restando sempre in tempo LOCALE, mai passando da
+// toISOString(): new Date(anno, mese, giorno) e i metodi getFullYear/
+// getMonth/getDate lavorano tutti in locale, quindi non c'è mai una
+// conversione UTC che possa far scivolare il risultato di un giorno
+// (il bug che ha causato le date di fine "prima" della data di inizio
+// negli eventi sincronizzati da Google Calendar, vedi eventoAGoogleBody
+// e googleAEventoApp più sotto).
+function sommaGiorniISO(dataISO, giorni) {
+  const [y, m, d] = dataISO.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + giorni);
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const gg = String(dt.getDate()).padStart(2, "0");
+  return `${dt.getFullYear()}-${mm}-${gg}`;
+}
+
 // Data (ISO) dell'ultima partita registrata per il giocatore, o null se non
 // ne ha nessuna. Usata sia per l'ordinamento "Ultima partita giocata" sia
 // per l'indicazione testuale mostrata nella card.
@@ -2303,8 +2320,7 @@ function eventoAGoogleBody(ev) {
     // Google richiede per gli eventi "tutto il giorno" che la fine sia il
     // giorno DOPO (esclusivo) — sia per un evento di un solo giorno sia
     // per uno su più giorni (usiamo dataFine se presente, altrimenti data).
-    const fine = new Date((ev.dataFine || ev.data) + "T00:00:00"); fine.setDate(fine.getDate() + 1);
-    body.end = { date: fine.toISOString().slice(0, 10) };
+    body.end = { date: sommaGiorniISO(ev.dataFine || ev.data, 1) };
   } else {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Zurich";
     body.start = { dateTime: `${ev.data}T${ev.oraInizio || "09:00"}:00`, timeZone: tz };
@@ -2338,9 +2354,7 @@ function googleAEventoApp(g) {
   // indietro prima di confrontarla con la data di inizio.
   let dataFine = "";
   if (tuttoIlGiorno && g.end && g.end.date) {
-    const fineEsclusiva = new Date(g.end.date + "T00:00:00");
-    fineEsclusiva.setDate(fineEsclusiva.getDate() - 1);
-    const fineReale = fineEsclusiva.toISOString().slice(0, 10);
+    const fineReale = sommaGiorniISO(g.end.date, -1);
     if (fineReale !== g.start.date) dataFine = fineReale;
   } else if (!tuttoIlGiorno && g.end && g.end.dateTime) {
     const fineReale = g.end.dateTime.slice(0, 10);
