@@ -6535,11 +6535,138 @@ function renderCalendario(content) {
       input.value = "";
     });
   });
+  content.querySelectorAll(".cal-suggerito-giocatore").forEach(chip => {
+    chip.onclick = () => {
+      const eventoId = chip.dataset.eventoId;
+      const giocatoreId = chip.dataset.playerId;
+      const evento = eventi.find(e => e.id === eventoId);
+      if (evento) {
+        evento.giocatoriIds = evento.giocatoriIds || [];
+        if (!evento.giocatoriIds.includes(giocatoreId)) evento.giocatoriIds.push(giocatoreId);
+      }
+      savePlayers();
+      renderCalendario(content);
+    };
+  });
+}
+
+// Parole generiche che non identificano il club (prefissi societari, sigle
+// federative) — vengono tolte prima di confrontare i nomi squadra tra il
+// campo "luogo" di un evento e il campo "squadra" dei giocatori, perché i
+// due posti scrivono gli stessi club in modo diverso ("BSC Young Boys" vs
+// "Young Boys U21", "FC Basel 1893 U-21" vs "fc Basel u21", ecc.).
+const SQUADRA_STOP_WORDS = new Set(["fc", "sc", "bsc", "ac", "cs", "fco", "club", "calcio", "football", "fca", "fcs", "team"]);
+
+// Scompone un nome squadra in un "nucleo" (le parole che identificano il
+// club, es. "lugano", "young boys", "st gallen") e, se presente, la
+// categoria d'età come solo numero (es. "21" per U-21 o M-21, "15" per
+// U15/U-15) — la lettera U/M viene ignorata perché indica lo stesso livello
+// di categoria in tedesco/francese, cambia solo la lingua dell'etichetta.
+function analizzaNomeSquadra(raw) {
+  let t = String(raw || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  t = t.replace(/[-–—]/g, " ");
+  t = t.replace(/[^\p{L}\p{N}\s]/gu, " ");
+  let categoria = null;
+  t = t.replace(/\b[um]\s*(\d{2})\b/g, (m, num) => { categoria = num; return " "; });
+  t = t.replace(/\b(18|19|20)\d{2}\b/g, " ");
+  const parole = t.split(/\s+/).map(w => w.trim()).filter(Boolean).filter(w => !SQUADRA_STOP_WORDS.has(w));
+  return { core: parole.join(" "), categoria };
+}
+
+// Due "nuclei" squadra sono considerati la stessa squadra se l'insieme di
+// parole più corto è interamente contenuto in quello più lungo (gestisce
+// "young boys" dentro "bsc young boys", "st gallen" dentro "fc st gallen
+// 1879", ecc.) senza richiedere una corrispondenza esatta della stringa.
+function squadreCoerenti(coreA, coreB) {
+  if (!coreA || !coreB) return false;
+  if (coreA === coreB) return true;
+  const wa = new Set(coreA.split(" ").filter(Boolean));
+  const wb = new Set(coreB.split(" ").filter(Boolean));
+  const [piccolo, grande] = wa.size <= wb.size ? [wa, wb] : [wb, wa];
+  if (!piccolo.size) return false;
+  return [...piccolo].every(w => grande.has(w));
+}
+
+// Cerca tra tutti i giocatori quelli il cui campo "squadra" corrisponde al
+// testo passato (tipicamente una delle due metà del campo "luogo" di un
+// evento). Se il testo indica una categoria (U21, M-21, ecc.) vengono presi
+// solo i giocatori di quella categoria; se non la indica, vengono presi
+// tutti i giocatori del club a prescindere dalla categoria. Un "core"
+// troppo corto (meno di 3 caratteri, es. testo vuoto o solo sigle) viene
+// considerato non riconosciuto per evitare falsi positivi.
+function trovaGiocatoriPerSquadra(testoRicerca) {
+  const ric = analizzaNomeSquadra(testoRicerca);
+  if (!ric.core || ric.core.length < 3) return { riconosciuta: false, giocatori: [] };
+  // "riconosciuta" indica che il testo corrisponde a un club presente nel
+  // database (a prescindere dalla categoria): serve a distinguere un vero
+  // nome di squadra senza giocatori scoutati di quella categoria (mostra
+  // comunque "Nessun giocatore trovato") da un testo qualunque che non è
+  // affatto un nome di club, es. una nota personale (non mostra la colonna).
+  let clubTrovato = false;
+  const trovati = players.filter(p => {
+    if (!p.squadra) return false;
+    const ps = analizzaNomeSquadra(p.squadra);
+    if (!ps.core || !squadreCoerenti(ric.core, ps.core)) return false;
+    clubTrovato = true;
+    return ric.categoria ? ps.categoria === ric.categoria : true;
+  });
+  trovati.sort((a, b) => `${a.cognome} ${a.nome}`.localeCompare(`${b.cognome} ${b.nome}`, "it"));
+  return { riconosciuta: clubTrovato, giocatori: trovati };
+}
+
+// Calcola le colonne "probabili giocatori" da mostrare sotto un evento.
+// Se il campo luogo è nel formato "Squadra A - Squadra B" (il caso tipico
+// delle Partite) prova a riconoscere entrambe le squadre; per gli eventi di
+// tipo Partita le due colonne restano comunque visibili anche quando una
+// squadra non viene riconosciuta (mostrando "Nessun giocatore trovato"),
+// perché il formato del titolo garantisce comunque due squadre. Per gli
+// altri tipi di evento (Raduno, Torneo, Allenamento, Altro) una colonna
+// compare solo se il testo viene effettivamente riconosciuto come un club
+// presente nel database, per non riempire di colonne vuote eventi che non
+// c'entrano con nessuna squadra (es. note personali). I giocatori già
+// presenti tra i "convocati" dell'evento non vengono ripetuti qui sotto.
+function calcolaColonneProbabiliGiocatori(e) {
+  const luogo = (e.luogo || "").trim();
+  if (!luogo) return [];
+  const giaConvocatiIds = new Set(e.giocatoriIds || []);
+  const parti = luogo.split(/\s+[-–—]\s+/).map(s => s.trim()).filter(Boolean);
+  const colonne = [];
+  if (parti.length === 2) {
+    parti.forEach(parte => {
+      const ris = trovaGiocatoriPerSquadra(parte);
+      if (ris.riconosciuta || e.tipo === "Partita") {
+        colonne.push({ label: parte, giocatori: ris.giocatori.filter(p => !giaConvocatiIds.has(p.id)) });
+      }
+    });
+  } else {
+    const ris = trovaGiocatoriPerSquadra(luogo);
+    if (ris.riconosciuta) {
+      colonne.push({ label: luogo, giocatori: ris.giocatori.filter(p => !giaConvocatiIds.has(p.id)) });
+    }
+  }
+  return colonne;
 }
 
 function calEventoCardHTML(e) {
   const giocatoriCollegati = (e.giocatoriIds || []).map(id => players.find(p => p.id === id)).filter(Boolean);
   const categoria = e.categoria || "Scouting";
+  const colonneProbabili = calcolaColonneProbabiliGiocatori(e);
+  const probabiliHTML = colonneProbabili.length ? `
+        <div class="cal-probabili-giocatori" style="margin-top:10px; padding-top:8px; border-top:1px dashed var(--line);">
+          <div class="muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px;">Probabili giocatori</div>
+          <div style="display:flex; gap:18px; flex-wrap:wrap;">
+            ${colonneProbabili.map(col => `
+              <div style="flex:1 1 220px; min-width:200px;">
+                <div class="muted" style="font-size:11.5px; margin-bottom:4px;">${esc(col.label)}</div>
+                <div class="cal-giocatori-collegati">
+                  ${col.giocatori.length
+                    ? col.giocatori.map(p => `
+                      <span class="chip cal-suggerito-giocatore" data-evento-id="${e.id}" data-player-id="${p.id}" style="cursor:pointer;" title="Aggiungi ai convocati">+ ${esc(p.cognome)} ${esc(p.nome)}</span>`).join("")
+                    : `<span class="muted" style="font-size:12.5px;">Nessun giocatore trovato</span>`}
+                </div>
+              </div>`).join("")}
+          </div>
+        </div>` : "";
   return `
     <div class="candidato-card">
       <div class="candidato-card-header">
@@ -6561,6 +6688,7 @@ function calEventoCardHTML(e) {
           : `<span class="muted" style="font-size:12.5px;">Nessun giocatore convocato</span>`}
       </div>
       <input type="text" class="cal-add-giocatore-input" data-evento-id="${e.id}" list="cal-players-datalist" placeholder="+ Aggiungi giocatore da convocare" style="margin-top:8px; max-width:320px;">
+      ${probabiliHTML}
     </div>
   `;
 }
