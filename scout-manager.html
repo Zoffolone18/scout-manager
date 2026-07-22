@@ -2091,7 +2091,11 @@ async function gestisciRitornoOAuthGoogle() {
         redirect_uri: googleRedirectUri(), code_verifier: verifier,
       }),
     });
-    if (!resp.ok) throw new Error("scambio codice non riuscito (" + resp.status + ")");
+    if (!resp.ok) {
+      const dettaglio = await resp.json().catch(() => null);
+      const messaggio = dettaglio ? `${dettaglio.error || ""}: ${dettaglio.error_description || ""}` : "";
+      throw new Error("scambio codice non riuscito (" + resp.status + ") " + messaggio);
+    }
     const data = await resp.json();
     googleCal.clientId = clientId;
     googleCal.accessToken = data.access_token;
