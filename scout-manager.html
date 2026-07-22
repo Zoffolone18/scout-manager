@@ -6614,17 +6614,20 @@ function trovaGiocatoriPerSquadra(testoRicerca) {
   return { riconosciuta: clubTrovato, giocatori: trovati };
 }
 
-// Calcola le colonne "probabili giocatori" da mostrare sotto un evento.
-// Se il campo luogo è nel formato "Squadra A - Squadra B" (il caso tipico
-// delle Partite) prova a riconoscere entrambe le squadre; per gli eventi di
-// tipo Partita le due colonne restano comunque visibili anche quando una
-// squadra non viene riconosciuta (mostrando "Nessun giocatore trovato"),
-// perché il formato del titolo garantisce comunque due squadre. Per gli
-// altri tipi di evento (Raduno, Torneo, Allenamento, Altro) una colonna
-// compare solo se il testo viene effettivamente riconosciuto come un club
-// presente nel database, per non riempire di colonne vuote eventi che non
-// c'entrano con nessuna squadra (es. note personali). I giocatori già
-// presenti tra i "convocati" dell'evento non vengono ripetuti qui sotto.
+// Calcola le colonne "probabili giocatori" da mostrare sotto un evento,
+// per QUALSIASI tipo di evento (Partita, Raduno, Torneo, Allenamento,
+// Altro) — non solo le Partite: nei dati reali capita spesso di scrivere
+// un confronto tra due squadre nel campo luogo anche su eventi di tipo
+// "Altro" (es. "Lugano u21 - Luzern U21"). Se il campo luogo è nel formato
+// "Squadra A - Squadra B" le due colonne vengono mostrate sempre, anche
+// quando una squadra non viene riconosciuta nel database (mostrando
+// "Nessun giocatore trovato"), perché il trattino nel titolo indica comunque
+// l'intenzione di indicare due squadre. Se invece il luogo è un testo unico
+// (nessun trattino), la colonna compare solo se il testo corrisponde
+// davvero a un club presente nel database, per non riempire di colonne
+// vuote eventi che non c'entrano con nessuna squadra (es. note personali
+// come "Lavoro tutto il giorno"). I giocatori già presenti tra i
+// "convocati" dell'evento non vengono ripetuti qui sotto.
 function calcolaColonneProbabiliGiocatori(e) {
   const luogo = (e.luogo || "").trim();
   if (!luogo) return [];
@@ -6634,9 +6637,7 @@ function calcolaColonneProbabiliGiocatori(e) {
   if (parti.length === 2) {
     parti.forEach(parte => {
       const ris = trovaGiocatoriPerSquadra(parte);
-      if (ris.riconosciuta || e.tipo === "Partita") {
-        colonne.push({ label: parte, giocatori: ris.giocatori.filter(p => !giaConvocatiIds.has(p.id)) });
-      }
+      colonne.push({ label: parte, giocatori: ris.giocatori.filter(p => !giaConvocatiIds.has(p.id)) });
     });
   } else {
     const ris = trovaGiocatoriPerSquadra(luogo);
