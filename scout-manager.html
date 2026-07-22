@@ -6887,6 +6887,7 @@ function repartiRaduno(raduno) {
 // chiavi/colori sono quelli confermati; altre categorie potranno essere
 // aggiunte qui in futuro senza toccare il resto del codice.
 const RADUNO_LEGENDA = [
+  { chiave: "kadera", nome: "Kader A", colore: "#d6389e", testo: "#fff" },
   { chiave: "kaderspieler", nome: "Kaderspieler", colore: "#b3382c", testo: "#fff" },
   { chiave: "pikett", nome: "Pikett-Spieler", colore: "#d4a017", testo: "#1a1a1a" },
   { chiave: "nachnominiert", nome: "Nachnominiert", colore: "#c8701f", testo: "#fff" },
@@ -7227,13 +7228,13 @@ function renderRadunoDettaglio(content) {
   // avere sempre sott'occhio quanti sono i convocati e quanti i picchetti
   // mentre si lavora sulla rosa — mostrato accanto alla legenda colori e
   // ricalcolato a ogni render, quindi resta aggiornato in tempo reale a ogni
-  // clic sullo stato di un giocatore.
+  // clic sullo stato di un giocatore. I giocatori senza stato (quadratino
+  // trasparente sul campo) non hanno un conteggio dedicato: è la legenda
+  // stessa a spiegare che "trasparente" equivale a nessuno stato assegnato.
   const conteggioPerStato = {};
   RADUNO_LEGENDA.forEach(s => { conteggioPerStato[s.chiave] = 0; });
-  let conteggioNessuno = 0;
   (r.rosa || []).forEach(v => {
     if (v.stato && conteggioPerStato.hasOwnProperty(v.stato)) conteggioPerStato[v.stato]++;
-    else conteggioNessuno++;
   });
 
   content.innerHTML = `
@@ -7282,9 +7283,8 @@ function renderRadunoDettaglio(content) {
       </div>
 
       <div class="raduno-legenda">
-        <span class="raduno-legenda-voce"><span class="raduno-legenda-pallino" style="background:var(--gold);"></span>Nessuno <span class="muted">(${conteggioNessuno})</span></span>
         ${RADUNO_LEGENDA.map(s => `<span class="raduno-legenda-voce"><span class="raduno-legenda-pallino" style="background:${s.colore};"></span>${esc(s.nome)} <span class="muted">(${conteggioPerStato[s.chiave]})</span></span>`).join("")}
-        <span class="muted" style="font-size:12px;">— clicca il quadratino colorato su un giocatore per scegliere lo stato, trascinalo per spostarlo o riordinarlo</span>
+        <span class="muted" style="font-size:12px;">— clicca il quadratino colorato su un giocatore per scegliere lo stato (un quadratino trasparente significa nessuno stato), trascinalo per spostarlo o riordinarlo</span>
       </div>
 
       ${griglia.map(riga => `
