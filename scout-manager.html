@@ -2509,6 +2509,7 @@ function renderGoogleCalendarStatusHTML() {
       ${googleCal.ultimoErrore ? `<p style="color:var(--low);"><strong>Ultimo errore:</strong> ${esc(googleCal.ultimoErrore)}</p>` : ""}
       <div class="import-actions">
         <button class="btn btn-primary" id="btn-sincronizza-ora-google">Sincronizza ora</button>
+        <button class="btn btn-ghost" id="btn-risincronizza-tutto-google" title="Ricontrolla tutti gli eventi da zero, non solo le novità — utile dopo un aggiornamento dell'app">Ricontrolla tutto da zero</button>
         <button class="btn btn-ghost" id="btn-cambia-calendario-google">Cambia calendario</button>
         <button class="btn btn-ghost" id="btn-scollega-google">Scollega</button>
       </div>
@@ -2523,6 +2524,8 @@ function wireGoogleCalendarStatusHTML(content) {
   }
   const btnSync = document.getElementById("btn-sincronizza-ora-google");
   if (btnSync) btnSync.onclick = () => sincronizzaOra();
+  const btnRisync = document.getElementById("btn-risincronizza-tutto-google");
+  if (btnRisync) btnRisync.onclick = () => sincronizzaOra({ primaVolta: true });
   const btnCambia = document.getElementById("btn-cambia-calendario-google");
   if (btnCambia) btnCambia.onclick = () => cambiaCalendarioGoogle();
   const btnScollega = document.getElementById("btn-scollega-google");
