@@ -2314,15 +2314,29 @@ function eventoAGoogleBody(ev) {
 
 function googleAEventoApp(g) {
   const priv = (g.extendedProperties && g.extendedProperties.private) || {};
+  const creatoDallApp = !!priv.scoutManagerId;
   const tuttoIlGiorno = !!(g.start && g.start.date);
   let giocatoriIds = [];
   try { giocatoriIds = JSON.parse(priv.giocatoriIds || "[]"); } catch (e) { giocatoriIds = []; }
+
+  // Se l'evento è stato creato direttamente su Google (non dall'app), non
+  // abbiamo un titolo "strutturato" salvato a parte — recuperiamo almeno
+  // il testo che la persona ha scritto come titolo dell'evento (g.summary),
+  // altrimenti andrebbe perso e la card mostrerebbe solo "Altro" senza
+  // nessuna informazione utile.
+  let luogo = g.location || "";
+  let note = priv.notaOriginale !== undefined ? priv.notaOriginale : (g.description || "");
+  if (!creatoDallApp && g.summary) {
+    if (!luogo) luogo = g.summary;
+    else note = g.summary + (note ? "\n\n" + note : "");
+  }
+
   return {
     data: tuttoIlGiorno ? g.start.date : (g.start.dateTime || "").slice(0, 10),
     tipo: priv.tipo || "Altro",
     categoria: priv.categoria || "Scouting",
-    luogo: g.location || "",
-    note: priv.notaOriginale !== undefined ? priv.notaOriginale : (g.description || ""),
+    luogo,
+    note,
     tuttoIlGiorno,
     oraInizio: tuttoIlGiorno ? "" : (g.start.dateTime || "").slice(11, 16),
     oraFine: tuttoIlGiorno ? "" : (g.end && g.end.dateTime ? g.end.dateTime.slice(11, 16) : ""),
@@ -6453,7 +6467,7 @@ function renderCalendario(content) {
   }
 
   content.querySelectorAll("[data-modifica-evento]").forEach(btn => {
-    btn.onclick = () => { calEventoInModifica = btn.dataset.modificaEvento; renderCalendario(content); };
+    btn.onclick = () => { calEventoInModifica = btn.dataset.modificaEvento; renderCalendario(content); window.scrollTo(0, 0); };
   });
   content.querySelectorAll("[data-elimina-evento]").forEach(btn => {
     btn.onclick = () => {
