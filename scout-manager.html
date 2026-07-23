@@ -2815,6 +2815,12 @@ async function boot() {
     console.error("Google Calendar:", e);
   }
 
+  try {
+    weekendWorkerUrl = (await idbGet("weekend-worker-url").catch(() => "")) || "";
+  } catch (e) {
+    console.error("Cerca partite del weekend:", e);
+  }
+
   render();
 }
 
@@ -6509,6 +6515,200 @@ function renderStrumenti(content) {
 /* ===================== CALENDARIO ===================== */
 let calEventoInModifica = null;
 
+// Configurazione delle competizioni interrogate dal pulsante "Cerca
+// partite del weekend" — DEVE restare allineata all'array COMPETIZIONI
+// dentro weekend-matches-worker.js (stesso ordine non necessario, ma
+// stessi nomi/categorie): qui serve solo a sapere quale categoria
+// applicare quando si incrociano i nomi delle squadre restituite dal
+// Worker con i giocatori della banca dati (vedi trovaGiocatoriPerSquadraECategoria).
+const COMPETIZIONI_MATCHCENTER = [
+  { nome: "Super League", categoria: null },
+  { nome: "Challenge League", categoria: null },
+  { nome: "U-19 Elite", categoria: "U19" },
+  { nome: "U-18", categoria: "U18" },
+  { nome: "U-17 Elite", categoria: "U17" },
+  { nome: "U-16 Elite", categoria: "U16" },
+  { nome: "U-16", categoria: "U16" },
+  { nome: "U-15", categoria: "U15" },
+];
+
+let weekendWorkerUrl = "";
+let weekendRicerca = { inCorso: false, errore: null, diagnostica: null, risultati: null, da: null, a: null };
+
+// Calcola il prossimo weekend (venerdì-domenica) a partire da oggi: se
+// oggi è già venerdì/sabato/domenica usa il weekend in corso, altrimenti
+// il venerdì successivo. Stessa logica di date "in locale" usata altrove
+// nell'app (mai toISOString, vedi sommaGiorniISO) per non rischiare lo
+// stesso bug di un giorno visto nella sincronizzazione Google Calendar.
+function calcolaWeekendProssimo() {
+  const oggi = dataOggiLocale();
+  const [y, m, d] = oggi.split("-").map(Number);
+  const dow = new Date(y, m - 1, d).getDay(); // 0=Dom..6=Sab
+  let giorniAVenerdi;
+  if (dow === 5) giorniAVenerdi = 0;
+  else if (dow === 6) giorniAVenerdi = -1;
+  else if (dow === 0) giorniAVenerdi = -2;
+  else giorniAVenerdi = 5 - dow;
+  const venerdi = sommaGiorniISO(oggi, giorniAVenerdi);
+  const domenica = sommaGiorniISO(venerdi, 2);
+  return { da: venerdi, a: domenica };
+}
+
+async function cercaPartiteWeekend(content, da, a) {
+  if (!weekendWorkerUrl) { alert("Prima inserisci l'indirizzo del Worker Cloudflare qui sotto."); return; }
+  weekendRicerca = { inCorso: true, errore: null, diagnostica: null, risultati: null, da, a };
+  renderCalendario(content);
+  try {
+    const risposta = await fetch(`${weekendWorkerUrl.replace(/\/$/, "")}/?from=${da}&to=${a}`);
+    if (!risposta.ok) throw new Error(`Il Worker ha risposto con errore HTTP ${risposta.status}`);
+    const dati = await risposta.json();
+    const risultati = (dati.partite || []).map(partita => {
+      const infoCompetizione = COMPETIZIONI_MATCHCENTER.find(c => c.nome === partita.competizione);
+      const categoria = infoCompetizione ? infoCompetizione.categoria : (partita.categoria || null);
+      const giocatoriCasa = trovaGiocatoriPerSquadraECategoria(partita.casa, categoria);
+      const giocatoriOspite = trovaGiocatoriPerSquadraECategoria(partita.ospite, categoria);
+      return { ...partita, giocatoriCasa, giocatoriOspite };
+    });
+    weekendRicerca = { inCorso: false, errore: null, diagnostica: dati.diagnostica || null, risultati, da, a };
+  } catch (e) {
+    console.error(e);
+    weekendRicerca = { inCorso: false, errore: e.message, diagnostica: null, risultati: null, da, a };
+  }
+  renderCalendario(content);
+}
+
+function renderRicercaWeekendHTML() {
+  const w = weekendRicerca;
+  const weekendDefault = calcolaWeekendProssimo();
+  const da = w.da || weekendDefault.da;
+  const a = w.a || weekendDefault.a;
+
+  if (!weekendWorkerUrl) {
+    return `
+      <div class="import-subsection">
+        <h3>Cerca partite del weekend</h3>
+        <p class="muted">Cerca in automatico, sul matchcenter della Federazione, le partite del weekend che coinvolgono squadre e categorie presenti nella tua banca dati. Serve un Worker Cloudflare come "ponte" (stesso principio del collegamento Google Calendar): crea un nuovo Worker su Cloudflare, incolla il contenuto del file <span class="mono">weekend-matches-worker.js</span>, e metti qui sotto l'indirizzo che ti dà Cloudflare.</p>
+        <label>Indirizzo del Worker Cloudflare
+          <input type="text" id="weekend-worker-url-input" placeholder="https://tuoworker.tuonome.workers.dev" value="${esc(weekendWorkerUrl)}">
+        </label>
+        <div class="import-actions">
+          <button class="btn btn-primary" id="btn-salva-weekend-worker-url">Salva indirizzo</button>
+        </div>
+      </div>`;
+  }
+
+  let risultatiHTML = "";
+  if (w.inCorso) {
+    risultatiHTML = `<p class="muted">Ricerca in corso…</p>`;
+  } else if (w.errore) {
+    risultatiHTML = `<p style="color:var(--low);"><strong>Errore:</strong> ${esc(w.errore)}</p>`;
+  } else if (w.risultati) {
+    const conGiocatori = w.risultati.filter(p => p.giocatoriCasa.length || p.giocatoriOspite.length);
+    const senzaGiocatori = w.risultati.length - conGiocatori.length;
+    if (!w.risultati.length) {
+      risultatiHTML = `<p class="muted">Nessuna partita trovata dal Worker per queste date (potrebbe non esserci ancora un calendario pubblicato per questo periodo, es. giovanili in estate).</p>`;
+    } else if (!conGiocatori.length) {
+      risultatiHTML = `<p class="muted">${w.risultati.length} partite trovate in queste date, ma nessuna coinvolge una squadra/categoria della tua banca dati.</p>`;
+    } else {
+      risultatiHTML = `
+        <div class="cal-weekend-risultati">
+          ${conGiocatori.map((p, i) => `
+            <div class="candidato-card" style="margin-bottom:10px;">
+              <div class="candidato-card-header">
+                <strong class="mono">${formatDataIt(p.data)}</strong> <span class="mono">${esc(p.ora)}</span> — ${esc(p.competizione)}
+                <span class="chip" style="margin-left:8px;">${esc(p.casa)} - ${esc(p.ospite)}</span>
+                <div class="import-actions">
+                  <button class="btn btn-ghost btn-sm" data-weekend-aggiungi="${i}">+ Aggiungi a calendario</button>
+                </div>
+              </div>
+              <div style="display:flex; gap:18px; flex-wrap:wrap; margin-top:6px;">
+                <div style="flex:1 1 220px; min-width:200px;">
+                  <div class="muted" style="font-size:11.5px; margin-bottom:4px;">${esc(p.casa)}</div>
+                  <div class="cal-giocatori-collegati">
+                    ${p.giocatoriCasa.length ? p.giocatoriCasa.map(g => `<span class="chip cal-apri-giocatore" data-player-id="${g.id}" style="cursor:pointer;">${esc(g.cognome)} ${esc(g.nome)}</span>`).join("") : `<span class="muted" style="font-size:12.5px;">—</span>`}
+                  </div>
+                </div>
+                <div style="flex:1 1 220px; min-width:200px;">
+                  <div class="muted" style="font-size:11.5px; margin-bottom:4px;">${esc(p.ospite)}</div>
+                  <div class="cal-giocatori-collegati">
+                    ${p.giocatoriOspite.length ? p.giocatoriOspite.map(g => `<span class="chip cal-apri-giocatore" data-player-id="${g.id}" style="cursor:pointer;">${esc(g.cognome)} ${esc(g.nome)}</span>`).join("") : `<span class="muted" style="font-size:12.5px;">—</span>`}
+                  </div>
+                </div>
+              </div>
+            </div>`).join("")}
+        </div>
+        ${senzaGiocatori ? `<p class="muted">(+ altre ${senzaGiocatori} partite trovate in queste date senza giocatori tuoi, non mostrate)</p>` : ""}
+      `;
+    }
+  }
+
+  return `
+    <div class="import-subsection">
+      <h3>Cerca partite del weekend</h3>
+      <p class="muted">Cerca sul matchcenter della Federazione le partite del weekend che coinvolgono squadre/categorie della tua banca dati. La lista è solo da consultare: nessun evento viene aggiunto al calendario finché non premi tu "+ Aggiungi a calendario" su una partita.</p>
+      <div class="form-grid">
+        <label>Da
+          <input type="date" id="weekend-da" value="${esc(da)}">
+        </label>
+        <label>A
+          <input type="date" id="weekend-a" value="${esc(a)}">
+        </label>
+      </div>
+      <div class="import-actions">
+        <button class="btn btn-primary" id="btn-cerca-weekend" ${w.inCorso ? "disabled" : ""}>${w.inCorso ? "Ricerca in corso…" : "Cerca partite"}</button>
+        <button class="btn btn-ghost btn-sm" id="btn-cambia-weekend-worker-url">Cambia indirizzo Worker</button>
+      </div>
+      ${risultatiHTML}
+    </div>`;
+}
+
+function wireRicercaWeekendHTML(content) {
+  if (!weekendWorkerUrl) {
+    const btn = document.getElementById("btn-salva-weekend-worker-url");
+    if (btn) btn.onclick = async () => {
+      const url = document.getElementById("weekend-worker-url-input").value.trim();
+      if (!url) return;
+      weekendWorkerUrl = url;
+      await idbSet("weekend-worker-url", url);
+      renderCalendario(content);
+    };
+    return;
+  }
+  const btnCerca = document.getElementById("btn-cerca-weekend");
+  if (btnCerca) btnCerca.onclick = () => {
+    const da = document.getElementById("weekend-da").value;
+    const a = document.getElementById("weekend-a").value;
+    if (!da || !a) { alert("Inserisci entrambe le date."); return; }
+    if (a < da) { alert("La data 'a' non può essere prima della data 'da'."); return; }
+    cercaPartiteWeekend(content, da, a);
+  };
+  const btnCambia = document.getElementById("btn-cambia-weekend-worker-url");
+  if (btnCambia) btnCambia.onclick = async () => {
+    if (!confirm("Vuoi cambiare l'indirizzo del Worker Cloudflare usato per la ricerca partite?")) return;
+    weekendWorkerUrl = "";
+    await idbDelete("weekend-worker-url");
+    weekendRicerca = { inCorso: false, errore: null, diagnostica: null, risultati: null, da: null, a: null };
+    renderCalendario(content);
+  };
+  if (weekendRicerca.risultati) {
+    content.querySelectorAll("[data-weekend-aggiungi]").forEach(btn => {
+      btn.onclick = () => {
+        const p = weekendRicerca.risultati.filter(r => r.giocatoriCasa.length || r.giocatoriOspite.length)[Number(btn.dataset.weekendAggiungi)];
+        if (!p) return;
+        calEventoInModifica = null;
+        renderCalendario(content);
+        document.getElementById("cal-data").value = p.data;
+        document.getElementById("cal-tipo").value = "Partita";
+        document.getElementById("cal-luogo").value = `${p.casa} - ${p.ospite}`;
+        document.getElementById("cal-tutto-giorno").checked = false;
+        document.getElementById("cal-ora-inizio").value = p.ora;
+        document.getElementById("cal-note").value = p.competizione;
+        window.scrollTo(0, 0);
+      };
+    });
+  }
+}
+
 function renderCalendario(content) {
   const oggi = dataOggiLocale();
   const eventiOrdinati = eventi.slice().sort((a, b) => (a.data || "").localeCompare(b.data || ""));
@@ -6565,6 +6765,8 @@ function renderCalendario(content) {
           ${ev ? `<button class="btn btn-ghost" id="btn-annulla-modifica-evento">Annulla</button>` : ""}
         </div>
       </div>
+
+      ${renderRicercaWeekendHTML()}
 
       <div class="import-subsection">
         <h3>Prossimi eventi</h3>
@@ -6672,6 +6874,7 @@ function renderCalendario(content) {
       renderCalendario(content);
     };
   });
+  wireRicercaWeekendHTML(content);
 }
 
 // Parole generiche che non identificano il club (prefissi societari, sigle
@@ -6701,6 +6904,13 @@ function analizzaNomeSquadra(raw) {
 // parole più corto è interamente contenuto in quello più lungo (gestisce
 // "young boys" dentro "bsc young boys", "st gallen" dentro "fc st gallen
 // 1879", ecc.) senza richiedere una corrispondenza esatta della stringa.
+// ECCEZIONE: se il nucleo più corto è di UNA sola parola, deve
+// corrispondere esattamente (stessa unica parola su entrambi i lati),
+// altrimenti un club dal nome breve verrebbe scambiato per un club
+// diverso che contiene per caso la stessa parola dentro un nome più
+// lungo — es. "FC Zürich" (nucleo "zürich") non deve risultare coerente
+// con "Grasshopper Club Zürich" (nucleo "grasshopper zürich") solo
+// perché condividono la città nel nome societario.
 function squadreCoerenti(coreA, coreB) {
   if (!coreA || !coreB) return false;
   if (coreA === coreB) return true;
@@ -6708,6 +6918,7 @@ function squadreCoerenti(coreA, coreB) {
   const wb = new Set(coreB.split(" ").filter(Boolean));
   const [piccolo, grande] = wa.size <= wb.size ? [wa, wb] : [wb, wa];
   if (!piccolo.size) return false;
+  if (piccolo.size === 1) return coreA === coreB;
   return [...piccolo].every(w => grande.has(w));
 }
 
@@ -6741,6 +6952,30 @@ function trovaGiocatoriPerSquadra(testoRicerca) {
   });
   trovati.sort((a, b) => `${a.cognome} ${a.nome}`.localeCompare(`${b.cognome} ${b.nome}`, "it"));
   return { riconosciuta: clubTrovato, giocatori: trovati };
+}
+
+// Variante usata dalla ricerca "Cerca partite del weekend": qui la
+// categoria da applicare arriva dalla COMPETIZIONE trovata sul
+// matchcenter (es. "U-15"), non da un eventuale numero scritto nel nome
+// della squadra — perché lì il nome è sempre e solo il club (es. "FC
+// Lugano" gioca sia in Super League sia con l'U15/U19/U21: è la
+// competizione a dire quale). Se categoria è null (campionati assoluti)
+// vengono presi i giocatori senza categorie giovanili assegnate o
+// esplicitamente "Prima Squadra", per non riempire la partita di Super
+// League con i ragazzini U15 dello stesso club.
+function trovaGiocatoriPerSquadraECategoria(nomeSquadra, categoria) {
+  const ric = analizzaNomeSquadra(nomeSquadra);
+  if (!ric.core || ric.core.length < 3) return [];
+  const trovati = players.filter(p => {
+    if (!p.squadra) return false;
+    const ps = analizzaNomeSquadra(p.squadra);
+    if (!ps.core || !squadreCoerenti(ric.core, ps.core)) return false;
+    const cats = p.categorie || [];
+    if (categoria) return cats.includes(categoria);
+    return cats.length === 0 || cats.includes("Prima Squadra");
+  });
+  trovati.sort((a, b) => `${a.cognome} ${a.nome}`.localeCompare(`${b.cognome} ${b.nome}`, "it"));
+  return trovati;
 }
 
 // Calcola le colonne "probabili giocatori" da mostrare sotto un evento,
