@@ -6568,25 +6568,54 @@ function calcolaWeekendProssimo() {
   return { da: venerdi, a: domenica };
 }
 
+// Il Worker risponde una competizione alla volta (vedi commento in cima
+// a weekend-matches-worker-deno.js): otto richieste tutte insieme, coi
+// tempi di un proxy residenziale, rischiano di andare oltre il tempo
+// massimo di risposta consentito lato Worker — qui quindi l'app stessa
+// fa 8 chiamate separate, un paio alla volta (non tutte insieme, per
+// non intasare il proxy), mostrando quante ne mancano.
 async function cercaPartiteWeekend(content, da, a) {
-  if (!weekendWorkerUrl) { alert("Prima inserisci l'indirizzo del Worker Cloudflare qui sotto."); return; }
-  weekendRicerca = { inCorso: true, errore: null, diagnostica: null, risultati: null, da, a };
+  if (!weekendWorkerUrl) { alert("Prima inserisci l'indirizzo del Worker qui sotto."); return; }
+  weekendRicerca = { inCorso: true, progresso: 0, totale: COMPETIZIONI_MATCHCENTER.length, errore: null, diagnostica: null, risultati: null, da, a };
   renderCalendario(content);
+
+  const base = weekendWorkerUrl.replace(/\/$/, "");
+  const tutteLePartite = [];
+  const tuttaLaDiagnostica = [];
+  let indiceProssimo = 0;
+  const CONCORRENZA = 2;
+
+  async function lavoratore() {
+    while (indiceProssimo < COMPETIZIONI_MATCHCENTER.length) {
+      const mioIndice = indiceProssimo++;
+      const comp = COMPETIZIONI_MATCHCENTER[mioIndice];
+      try {
+        const risposta = await fetch(`${base}/?competizione=${encodeURIComponent(comp.nome)}&from=${da}&to=${a}`);
+        if (!risposta.ok) throw new Error(`HTTP ${risposta.status}`);
+        const dati = await risposta.json();
+        tutteLePartite.push(...(dati.partite || []));
+        if (dati.diagnostica) tuttaLaDiagnostica.push(...dati.diagnostica);
+      } catch (e) {
+        tuttaLaDiagnostica.push({ competizione: comp.nome, errore: e.message });
+      }
+      weekendRicerca.progresso++;
+      renderCalendario(content);
+    }
+  }
+
   try {
-    const risposta = await fetch(`${weekendWorkerUrl.replace(/\/$/, "")}/?from=${da}&to=${a}`);
-    if (!risposta.ok) throw new Error(`Il Worker ha risposto con errore HTTP ${risposta.status}`);
-    const dati = await risposta.json();
-    const risultati = (dati.partite || []).map(partita => {
+    await Promise.all(Array.from({ length: CONCORRENZA }, lavoratore));
+    const risultati = tutteLePartite.map(partita => {
       const infoCompetizione = COMPETIZIONI_MATCHCENTER.find(c => c.nome === partita.competizione);
       const categoria = infoCompetizione ? infoCompetizione.categoria : (partita.categoria || null);
       const giocatoriCasa = trovaGiocatoriPerSquadraECategoria(partita.casa, categoria);
       const giocatoriOspite = trovaGiocatoriPerSquadraECategoria(partita.ospite, categoria);
       return { ...partita, giocatoriCasa, giocatoriOspite };
     });
-    weekendRicerca = { inCorso: false, errore: null, diagnostica: dati.diagnostica || null, risultati, da, a };
+    weekendRicerca = { inCorso: false, errore: null, diagnostica: tuttaLaDiagnostica.length ? tuttaLaDiagnostica : null, risultati, da, a };
   } catch (e) {
     console.error(e);
-    weekendRicerca = { inCorso: false, errore: e.message, diagnostica: null, risultati: null, da, a };
+    weekendRicerca = { inCorso: false, errore: e.message, diagnostica: tuttaLaDiagnostica.length ? tuttaLaDiagnostica : null, risultati: null, da, a };
   }
   renderCalendario(content);
 }
@@ -6613,7 +6642,7 @@ function renderRicercaWeekendHTML() {
 
   let risultatiHTML = "";
   if (w.inCorso) {
-    risultatiHTML = `<p class="muted">Ricerca in corso…</p>`;
+    risultatiHTML = `<p class="muted">Ricerca in corso… (${w.progresso || 0}/${w.totale || COMPETIZIONI_MATCHCENTER.length} competizioni controllate — i proxy residenziali sono lenti, può volerci fino a un minuto)</p>`;
   } else if (w.errore) {
     risultatiHTML = `<p style="color:var(--low);"><strong>Errore:</strong> ${esc(w.errore)}</p>`;
   } else if (w.risultati) {
