@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Scout Manager — Schede Giocatori</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0d1712">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
@@ -1803,6 +1807,34 @@ let anthropicApiKey = "";
 let geminiApiKey = "";
 let ultimoContenutoRemoto = null;
 
+/* ===================== Copia locale / uso offline =====================
+   L'app tiene SEMPRE una copia dei dati sul dispositivo (IndexedDB), oltre
+   a Dropbox: così puoi consultare E modificare la banca dati anche senza
+   internet (es. in aereo), e le modifiche vengono sincronizzate da sole
+   con Dropbox appena torna la connessione. "sincronizzazioneInSospeso"
+   indica che ci sono modifiche salvate solo sul dispositivo, non ancora
+   caricate su Dropbox. */
+const CHIAVE_DATI_LOCALI = "dati-locali";
+const CHIAVE_SYNC_IN_SOSPESO = "sync-in-sospeso";
+let sincronizzazioneInSospeso = false;
+
+async function salvaDatiLocali() {
+  await idbSet(CHIAVE_DATI_LOCALI, { players, eventi, raduni, salvatoIl: new Date().toISOString() });
+}
+
+async function caricaDatiLocali() {
+  return await idbGet(CHIAVE_DATI_LOCALI).catch(() => null);
+}
+
+function sembraOffline(e) {
+  // navigator.onLine non è sempre affidabile (alcuni browser lo lasciano
+  // "true" anche senza vera connessione), quindi consideriamo "offline"
+  // anche un TypeError di fetch tipico dell'assenza di rete.
+  if (navigator.onLine === false) return true;
+  const msg = String(e && e.message || e || "");
+  return /failed to fetch|networkerror|network error|load failed/i.test(msg);
+}
+
 function idbOpen() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open("scout-manager-db", 2);
@@ -2016,6 +2048,11 @@ async function caricaSuDropbox() {
 }
 
 async function savePlayers() {
+  // Prima di tutto: salva sempre una copia sul dispositivo, connessi o
+  // no a Dropbox, online o offline — così nessuna modifica va mai persa
+  // anche se manca la connessione o si chiude la pagina.
+  try { await salvaDatiLocali(); } catch (e) { console.error("Salvataggio locale fallito", e); }
+
   if (!dropboxConnesso) return;
   if (players.length === 0) {
     const conferma = confirm(
@@ -2027,13 +2064,47 @@ async function savePlayers() {
   }
   try {
     await caricaSuDropbox();
+    sincronizzazioneInSospeso = false;
+    await idbSet(CHIAVE_SYNC_IN_SOSPESO, false);
     renderDropboxStatusBar("connesso");
     eseguiBackupAutomaticoSeNecessario();
   } catch (e) {
     console.error(e);
-    renderDropboxStatusBar("errore", e.message);
+    if (sembraOffline(e)) {
+      // Non è un vero errore: semplicemente non c'è connessione in
+      // questo momento. La modifica è comunque al sicuro sul
+      // dispositivo (salvata sopra) e verrà sincronizzata da sola
+      // appena torna internet.
+      sincronizzazioneInSospeso = true;
+      await idbSet(CHIAVE_SYNC_IN_SOSPESO, true).catch(() => {});
+      renderDropboxStatusBar("offline");
+    } else {
+      renderDropboxStatusBar("errore", e.message);
+    }
   }
 }
+
+// Prova a sincronizzare con Dropbox le modifiche fatte mentre eri
+// offline. Chiamata sia quando il browser segnala il ritorno della
+// connessione, sia manualmente (pulsante nella barra di stato).
+async function sincronizzaSeInSospeso() {
+  if (!dropboxConnesso || !sincronizzazioneInSospeso) return;
+  try {
+    await assicuraTokenValido();
+    await caricaSuDropbox();
+    sincronizzazioneInSospeso = false;
+    await idbSet(CHIAVE_SYNC_IN_SOSPESO, false).catch(() => {});
+    renderDropboxStatusBar("connesso");
+    eseguiBackupAutomaticoSeNecessario();
+  } catch (e) {
+    console.error("Sincronizzazione automatica fallita", e);
+    if (!sembraOffline(e)) renderDropboxStatusBar("errore", e.message);
+    // se è ancora offline non facciamo nulla: si riproverà al prossimo
+    // evento "online" o salvataggio.
+  }
+}
+
+window.addEventListener("online", () => { sincronizzaSeInSospeso(); });
 
 // ===================== Backup automatico =====================
 // Non esiste un vero "processo in background": questa app gira solo nel
@@ -2674,6 +2745,20 @@ function renderDropboxStatusBar(stato, messaggioErrore) {
     return;
   }
 
+  if (stato === "offline") {
+    bar.className = "file-status-bar fs-warn";
+    bar.innerHTML = `
+      <span class="fs-dot">🟡</span>
+      <span class="fs-text">Sei offline: le modifiche vengono salvate su questo dispositivo e sincronizzate da sole con Dropbox appena torna la connessione.</span>
+      <span class="fs-actions">
+        <button class="btn btn-ghost btn-sm" id="fs-btn-riprova-sync">Riprova ora</button>
+        <button class="btn btn-ghost btn-sm" id="fs-btn-export">Scarica copia (.json)</button>
+      </span>`;
+    document.getElementById("fs-btn-riprova-sync").onclick = sincronizzaSeInSospeso;
+    document.getElementById("fs-btn-export").onclick = esportaBackup;
+    return;
+  }
+
   if (stato === "errore") {
     bar.className = "file-status-bar fs-warn";
     bar.innerHTML = `
@@ -2795,6 +2880,21 @@ async function boot() {
     renderLogo();
   };
 
+  // Carica SEMPRE prima la copia locale (funziona anche offline, es. in
+  // aereo): così l'app è subito consultabile/modificabile a prescindere
+  // dalla connessione, anche prima di sapere se Dropbox risponde.
+  try {
+    const localeCache = await caricaDatiLocali();
+    if (localeCache) {
+      players = localeCache.players || [];
+      eventi = localeCache.eventi || [];
+      raduni = localeCache.raduni || [];
+    }
+    sincronizzazioneInSospeso = (await idbGet(CHIAVE_SYNC_IN_SOSPESO).catch(() => false)) || false;
+  } catch (e) {
+    console.error("Caricamento copia locale fallito", e);
+  }
+
   try {
     anthropicApiKey = (await idbGet("anthropic-api-key").catch(() => null)) || "";
     geminiApiKey = (await idbGet("gemini-api-key").catch(() => null)) || "";
@@ -2805,21 +2905,42 @@ async function boot() {
     if (appKey && refreshToken) {
       dbx.appKey = appKey;
       dbx.refreshToken = refreshToken;
-      await assicuraTokenValido();
-      const risultato = await scaricaDaDropbox();
-      players = risultato.players;
-      eventi = risultato.eventi || [];
-      raduni = risultato.raduni || [];
       dropboxConnesso = true;
-      renderDropboxStatusBar("connesso");
-      if (risultato.fileNonTrovato) avvisaSePercorsoNonTrovato();
-      eseguiBackupAutomaticoSeNecessario();
+      if (sincronizzazioneInSospeso) {
+        // Ci sono modifiche fatte offline nell'ultima sessione, non
+        // ancora salvate su Dropbox: le carichiamo SU (rispettando il
+        // controllo conflitti) invece di scaricare da Dropbox, altrimenti
+        // le perderemmo sovrascrivendole con la versione remota più
+        // vecchia.
+        await assicuraTokenValido();
+        await caricaSuDropbox();
+        sincronizzazioneInSospeso = false;
+        await idbSet(CHIAVE_SYNC_IN_SOSPESO, false).catch(() => {});
+        renderDropboxStatusBar("connesso");
+        eseguiBackupAutomaticoSeNecessario();
+      } else {
+        await assicuraTokenValido();
+        const risultato = await scaricaDaDropbox();
+        players = risultato.players;
+        eventi = risultato.eventi || [];
+        raduni = risultato.raduni || [];
+        await salvaDatiLocali();
+        renderDropboxStatusBar("connesso");
+        if (risultato.fileNonTrovato) avvisaSePercorsoNonTrovato();
+        eseguiBackupAutomaticoSeNecessario();
+      }
     } else {
       renderDropboxStatusBar("non-configurato");
     }
   } catch (e) {
     console.error(e);
-    renderDropboxStatusBar("errore", e.message);
+    if (sembraOffline(e)) {
+      // Nessuna connessione in questo momento: continuiamo con la copia
+      // locale già caricata sopra, senza mostrare un errore allarmante.
+      renderDropboxStatusBar("offline");
+    } else {
+      renderDropboxStatusBar("errore", e.message);
+    }
   }
 
   try {
@@ -8427,6 +8548,17 @@ function importaBackup(e) {
 }
 
 window.addEventListener("DOMContentLoaded", boot);
+
+// Registra il Service Worker che permette all'app di aprirsi anche
+// senza internet (es. in aereo), se il file sw.js è presente nella
+// stessa cartella di questa pagina. Se manca (o il browser non lo
+// supporta) l'app funziona comunque normalmente, solo senza questa
+// rete di sicurezza in più.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(e => console.warn("Service Worker non registrato:", e.message));
+  });
+}
 </script>
 </body>
 </html>
