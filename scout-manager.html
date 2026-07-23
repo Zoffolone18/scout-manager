@@ -648,6 +648,20 @@ body{
    risorsa se proprio non entrano. */
 .raduno-linea-reparti-fissa{ flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
 .raduno-linea-reparti-fissa .raduno-reparto-box{ flex: 1 1 260px; min-width: 250px; }
+/* Righe con un solo reparto (Portiere, 10er Zentral, Stürmer, ecc.): non ha
+   senso farle allargare a tutta la riga come le righe con più caselle
+   affiancate (terzini/centrali, ecc.) — restano alla stessa larghezza
+   "naturale" di una singola casella e vengono centrate. */
+.raduno-linea-reparti-singola{ justify-content: center; }
+.raduno-linea-reparti-singola .raduno-reparto-box{ flex: 0 1 260px; }
+
+/* Zoom del campo tattico (pulsanti +/− oppure pinch a due dita su
+   telefono/tablet, o Ctrl/Cmd+rotellina su desktop): il contenitore
+   scrolla, il blocco interno viene scalato mantenendo il layout invariato. */
+.raduno-zoom-controls{ display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.raduno-zoom-livello{ min-width: 44px; text-align: center; font-size: 12.5px; }
+.raduno-campo-zoom-scroll{ overflow: auto; touch-action: pan-x pan-y; padding: 6px; border: 1px solid var(--line); border-radius: 8px; max-height: 75vh; }
+.raduno-campo-zoom-inner{ transform-origin: top left; width: max-content; min-width: 100%; }
 /* La scheda del raduno non è limitata alla larghezza di lettura delle altre
    schermate (.import-box è pensato per testi, max-width 880px): qui invece
    ci servono più caselle affiancate, quindi usiamo tutta la larghezza
@@ -7196,6 +7210,30 @@ let raduniSezione = "lista";
 let radunoCorrenteId = null;
 let radunoNomeDaCreare = null;
 let radunoImportBozza = null;
+
+// Zoom del campo tattico nella vista dettaglio raduno (pulsanti, pinch a due
+// dita, Ctrl/Cmd+rotellina): livello 1 = 100%, min 0.5 (50%), max 2.5 (250%).
+let radunoZoomLivello = 1;
+let radunoPinchDistanzaIniziale = null;
+let radunoPinchZoomIniziale = null;
+
+function applicaZoomRaduno() {
+  const inner = document.getElementById("raduno-campo-zoom-inner");
+  const label = document.getElementById("raduno-zoom-livello");
+  if (inner) inner.style.transform = `scale(${radunoZoomLivello})`;
+  if (label) label.textContent = Math.round(radunoZoomLivello * 100) + "%";
+}
+
+function impostaZoomRaduno(nuovoLivello) {
+  radunoZoomLivello = Math.max(0.5, Math.min(2.5, Math.round(nuovoLivello * 100) / 100));
+  applicaZoomRaduno();
+}
+
+function distanzaTraTouch(t0, t1) {
+  const dx = t0.clientX - t1.clientX;
+  const dy = t0.clientY - t1.clientY;
+  return Math.sqrt(dx * dx + dy * dy);
+}
 // Giocatore per cui è aperto il popup di scelta colore/stato (uno alla volta).
 let radunoPopupStatoGiocatoreId = null;
 
@@ -7522,20 +7560,32 @@ function renderRadunoDettaglio(content) {
         <span class="muted" style="font-size:12px;">— clicca il quadratino colorato su un giocatore per scegliere lo stato (un quadratino trasparente significa nessuno stato), trascinalo per spostarlo o riordinarlo</span>
       </div>
 
-      ${griglia.map(riga => `
-        <div class="raduno-linea-row">
-          <div class="raduno-linea-reparti raduno-linea-reparti-fissa">
-            ${riga.map(rep => radunoRepartoHTML(r, rep)).join("")}
-          </div>
+      <div class="raduno-zoom-controls">
+        <button class="btn btn-ghost btn-sm" id="btn-raduno-zoom-out" title="Riduci zoom">− </button>
+        <span class="raduno-zoom-livello mono" id="raduno-zoom-livello">${Math.round(radunoZoomLivello * 100)}%</span>
+        <button class="btn btn-ghost btn-sm" id="btn-raduno-zoom-in" title="Aumenta zoom">+</button>
+        <button class="btn btn-ghost btn-sm" id="btn-raduno-zoom-reset">Reimposta zoom</button>
+        <span class="muted" style="font-size:11.5px;">su telefono/tablet allarga o stringi con due dita, su computer Ctrl/Cmd + rotellina</span>
+      </div>
+
+      <div class="raduno-campo-zoom-scroll" id="raduno-campo-zoom-scroll">
+        <div class="raduno-campo-zoom-inner" id="raduno-campo-zoom-inner" style="transform: scale(${radunoZoomLivello});">
+          ${griglia.map(riga => `
+            <div class="raduno-linea-row">
+              <div class="raduno-linea-reparti raduno-linea-reparti-fissa${riga.length === 1 ? " raduno-linea-reparti-singola" : ""}">
+                ${riga.map(rep => radunoRepartoHTML(r, rep)).join("")}
+              </div>
+            </div>
+          `).join("")}
+          ${(r.repartiPersonalizzati && r.repartiPersonalizzati.length) ? `
+            <div class="raduno-linea-row">
+              <div class="raduno-linea-titolo">Altri reparti</div>
+              <div class="raduno-linea-reparti">
+                ${r.repartiPersonalizzati.map(nome => radunoRepartoHTML(r, { id: nome, chiave: nome, nome, personalizzato: true })).join("")}
+              </div>
+            </div>` : ""}
         </div>
-      `).join("")}
-      ${(r.repartiPersonalizzati && r.repartiPersonalizzati.length) ? `
-        <div class="raduno-linea-row">
-          <div class="raduno-linea-titolo">Altri reparti</div>
-          <div class="raduno-linea-reparti">
-            ${r.repartiPersonalizzati.map(nome => radunoRepartoHTML(r, { id: nome, chiave: nome, nome, personalizzato: true })).join("")}
-          </div>
-        </div>` : ""}
+      </div>
 
       <div class="import-subsection">
         <label>+ Aggiungi reparto personalizzato
@@ -7561,6 +7611,34 @@ function renderRadunoDettaglio(content) {
     savePlayers();
     render();
   };
+
+  document.getElementById("btn-raduno-zoom-out").onclick = () => impostaZoomRaduno(radunoZoomLivello - 0.1);
+  document.getElementById("btn-raduno-zoom-in").onclick = () => impostaZoomRaduno(radunoZoomLivello + 0.1);
+  document.getElementById("btn-raduno-zoom-reset").onclick = () => impostaZoomRaduno(1);
+  const zoomScrollEl = document.getElementById("raduno-campo-zoom-scroll");
+  if (zoomScrollEl) {
+    zoomScrollEl.addEventListener("touchstart", (e) => {
+      if (e.touches.length === 2) {
+        radunoPinchDistanzaIniziale = distanzaTraTouch(e.touches[0], e.touches[1]);
+        radunoPinchZoomIniziale = radunoZoomLivello;
+      }
+    }, { passive: true });
+    zoomScrollEl.addEventListener("touchmove", (e) => {
+      if (e.touches.length === 2 && radunoPinchDistanzaIniziale) {
+        e.preventDefault();
+        const distanzaAttuale = distanzaTraTouch(e.touches[0], e.touches[1]);
+        impostaZoomRaduno(radunoPinchZoomIniziale * (distanzaAttuale / radunoPinchDistanzaIniziale));
+      }
+    }, { passive: false });
+    zoomScrollEl.addEventListener("touchend", (e) => {
+      if (e.touches.length < 2) { radunoPinchDistanzaIniziale = null; radunoPinchZoomIniziale = null; }
+    });
+    zoomScrollEl.addEventListener("wheel", (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      impostaZoomRaduno(radunoZoomLivello + (e.deltaY < 0 ? 0.1 : -0.1));
+    }, { passive: false });
+  }
 
   document.getElementById("rd-note-raduno").onchange = () => {
     r.note = document.getElementById("rd-note-raduno").value.trim();
