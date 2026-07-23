@@ -6685,6 +6685,19 @@ function renderRicercaWeekendHTML() {
     }
   }
 
+  // Mostra sempre eventuali errori per competizione (es. una squadra non
+  // raggiungibile), anche quando la ricerca nel complesso "riesce" — così
+  // non serve più aprire a mano l'indirizzo del Worker con &debug=1 per
+  // capire se qualcosa non ha funzionato.
+  const erroriDiagnostica = (w.diagnostica || []).filter(d => d.errore);
+  const diagnosticaHTML = (!w.inCorso && erroriDiagnostica.length) ? `
+    <details style="margin-top:10px;">
+      <summary class="muted" style="cursor:pointer; font-size:12.5px;">${erroriDiagnostica.length} competizion${erroriDiagnostica.length === 1 ? "e ha" : "i hanno"} dato un errore durante questa ricerca (clicca per i dettagli)</summary>
+      <ul style="margin:6px 0 0; padding-left:18px; font-size:12px;" class="muted">
+        ${erroriDiagnostica.map(d => `<li><strong>${esc(d.competizione)}</strong>: ${esc(d.errore)}</li>`).join("")}
+      </ul>
+    </details>` : "";
+
   return `
     <div class="import-subsection">
       <h3>Cerca partite del weekend</h3>
@@ -6702,6 +6715,7 @@ function renderRicercaWeekendHTML() {
         <button class="btn btn-ghost btn-sm" id="btn-cambia-weekend-worker-url">Cambia indirizzo Worker</button>
       </div>
       ${risultatiHTML}
+      ${diagnosticaHTML}
     </div>`;
 }
 
