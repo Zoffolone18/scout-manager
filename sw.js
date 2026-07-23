@@ -11,7 +11,7 @@
  * cache in background a ogni apertura online, ma cambiare il numero
  * forza un aggiornamento più deciso e pulito).
  */
-const CACHE_NAME = "scout-manager-v1";
+const CACHE_NAME = "scout-manager-v2";
 
 // Percorsi relativi alla cartella dove si trova QUESTO file (sw.js) —
 // deve stare nella stessa cartella di scout-manager.html.
@@ -20,6 +20,8 @@ const APP_SHELL = [
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png",
+  "./exceljs.min.js",
+  "./template-kaderliste-1-4-4-2.xlsx",
 ];
 
 // Risorse esterne (CDN) usate dall'app, cache "best effort": se non

@@ -9,6 +9,14 @@
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- ExcelJS: serve solo per l'esportazione "Kaderliste ufficiale" del Raduno,
+     perché a differenza della libreria xlsx qui sopra sa PRESERVARE lo
+     stile (colori, font, celle unite) di un file Excel già formattato
+     quando lo modifichiamo — è quello che serve per scrivere dentro il
+     modello ufficiale della federazione senza rovinarne la grafica.
+     Ospitato localmente (invece che da CDN) così funziona anche offline
+     insieme al resto dell'app. -->
+<script src="exceljs.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
@@ -7329,17 +7337,27 @@ function repartiRaduno(raduno) {
   return [...base, ...extra];
 }
 
-// Legenda colori per lo stato dei giocatori in rosa (stile Kaderliste). Le
-// chiavi/colori sono quelli confermati; altre categorie potranno essere
-// aggiunte qui in futuro senza toccare il resto del codice.
+// Legenda colori per lo stato dei giocatori in rosa (stile Kaderliste). I
+// colori di kaderspieler/pikett/nachnominiert/verletzt/abgesagt/sichtungklub
+// sono adesso IDENTICI a quelli della "LEGENDE" ufficiale nel foglio Excel
+// federale (Kaderliste), così l'esportazione Excel colorata (vedi
+// esportaKaderlisteUfficiale) risulta coerente con quello che si vede qui
+// nell'app. "kadera" e "sonstiges" sono comodità solo-app senza equivalente
+// nella legenda ufficiale: in esportazione restano senza colore (bianco).
 const RADUNO_LEGENDA = [
+  { chiave: "kaderspieler", nome: "Kaderspieler", colore: "#ff0000", testo: "#fff" },
+  { chiave: "pikett", nome: "Pikett-Spieler", colore: "#ffff00", testo: "#1a1a1a" },
+  { chiave: "nachnominiert", nome: "Nachnominiert", colore: "#ffc000", testo: "#1a1a1a" },
+  { chiave: "verletzt", nome: "Verletzt", colore: "#bfbfbf", testo: "#1a1a1a" },
+  { chiave: "abgesagt", nome: "Abgesagt", colore: "#bfbfbf", testo: "#1a1a1a" },
+  { chiave: "sichtungklub", nome: "Sichtung Klub", colore: "#4ea72e", testo: "#fff" },
   { chiave: "kadera", nome: "Kader A", colore: "#d6389e", testo: "#fff" },
-  { chiave: "kaderspieler", nome: "Kaderspieler", colore: "#b3382c", testo: "#fff" },
-  { chiave: "pikett", nome: "Pikett-Spieler", colore: "#d4a017", testo: "#1a1a1a" },
-  { chiave: "nachnominiert", nome: "Nachnominiert", colore: "#c8701f", testo: "#fff" },
-  { chiave: "verletzt", nome: "Verletzt", colore: "#8a8a8a", testo: "#fff" },
   { chiave: "sonstiges", nome: "Sonstiges", colore: "#4a4a4a", testo: "#fff" }
 ];
+// Chiavi dello stato che hanno un colore ufficiale nella LEGENDE del foglio
+// Excel federale — usate da esportaKaderlisteUfficiale per decidere quali
+// stati colorare nell'export (kadera/sonstiges restano bianchi in Excel).
+const RADUNO_STATI_CON_COLORE_UFFICIALE = new Set(["kaderspieler", "pikett", "nachnominiert", "verletzt", "abgesagt", "sichtungklub"]);
 function statoLegenda(chiave) {
   return RADUNO_LEGENDA.find(s => s.chiave === chiave) || null;
 }
@@ -7713,7 +7731,8 @@ function renderRadunoDettaglio(content) {
         <h2 style="margin:0;">${esc(r.nome)}</h2>
         <div class="import-actions">
           <button class="btn btn-ghost btn-sm" id="btn-modifica-raduno">Modifica scheda</button>
-          <button class="btn btn-ghost btn-sm" id="btn-esporta-raduno-dett">Esporta Excel</button>
+          <button class="btn btn-ghost btn-sm" id="btn-esporta-raduno-dett">Esporta Excel (semplice)</button>
+          ${r.modulo === "1-4-4-2" ? `<button class="btn btn-ghost btn-sm" id="btn-esporta-raduno-ufficiale">Esporta Kaderliste ufficiale</button>` : ""}
           <label class="btn btn-ghost btn-sm" style="cursor:pointer;">
             Importa/aggiungi da Excel
             <input type="file" accept=".xlsx,.xls" id="input-importa-raduno-dett" style="display:none;">
@@ -7800,6 +7819,9 @@ function renderRadunoDettaglio(content) {
   document.getElementById("btn-torna-lista-raduni").onclick = () => { raduniSezione = "lista"; render(); };
   document.getElementById("btn-modifica-raduno").onclick = () => { raduniSezione = "form"; render(); };
   document.getElementById("btn-esporta-raduno-dett").onclick = () => esportaRadunoExcel(r);
+  if (document.getElementById("btn-esporta-raduno-ufficiale")) {
+    document.getElementById("btn-esporta-raduno-ufficiale").onclick = () => esportaKaderlisteUfficiale(r);
+  }
   document.getElementById("input-importa-raduno-dett").addEventListener("change", (e) => avviaImportRaduno(e, r.id));
 
   document.getElementById("rd-modulo-rapido").onchange = (e) => {
@@ -8017,7 +8039,7 @@ function radunoRepartoHTML(r, rep) {
               <span class="rrg-nome" title="${esc(x.player.cognome + ' ' + x.player.nome)}">${esc(x.player.cognome)} ${esc(x.player.nome)}</span>
               <span class="rrg-squadra${classeMuted}" title="${esc(x.player.squadra || '')}">${esc(sigla)}</span>
               <span class="rrg-stato">
-                <button type="button" class="rrg-stato-swatch" data-apri-popup-stato="${x.giocatoreId}" title="Clicca per impostare lo stato" style="background:${stato ? stato.colore : "transparent"}; border-color:${stato ? "rgba(0,0,0,0.35)" : "var(--line)"};"></button>
+                <button type="button" class="rrg-stato-swatch" data-apri-popup-stato="${x.giocatoreId}" title="${stato ? esc(stato.nome) : "Nessuno stato"} — clicca per cambiare" style="background:${stato ? stato.colore : "transparent"}; border-color:${stato ? "rgba(0,0,0,0.35)" : "var(--line)"};"></button>
               </span>
               <span class="rrg-azioni" data-rimuovi-da-reparto="${x.giocatoreId}" title="Rimuovi dal reparto">✕</span>
             </div>`;
@@ -8476,6 +8498,151 @@ function confermaImportScheda(si) {
     radunoCorrenteId = raduno.id;
     raduniSezione = "dettaglio";
     render();
+  }
+}
+
+/* ============ ESPORTAZIONE "KADERLISTE UFFICIALE" (modello federale) ============
+ * A differenza di esportaRadunoExcel() (lista semplice, sempre disponibile
+ * per ogni modulo), questa esportazione riempie un file Excel che replica
+ * ESATTAMENTE il modello federale che Mattia/Mo usano per il TYT U16
+ * (foglio "09_U-16TYT Luogo" del Kaderliste ufficiale): stessa grafica,
+ * stesse celle unite, stessi colori. Per ora è disponibile solo per il
+ * modulo 1-4-4-2 perché è l'unico modello che abbiamo ricevuto — per gli
+ * altri moduli resta disponibile "Esporta Excel (semplice)".
+ *
+ * Il file template-kaderliste-1-4-4-2.xlsx deve stare nella stessa
+ * cartella di questa pagina (stesso principio di manifest.json/sw.js):
+ * è una copia "vuota" del modello ufficiale (intestazioni, legenda e
+ * celle unite originali, senza però nessun nome di giocatore) che questa
+ * funzione scarica e compila al volo.
+ *
+ * NOTA SU DESTRA/SINISTRA: il modello ha, per ogni reparto della fase
+ * difensiva/di centrocampo, una colonna a sinistra del foglio e una a
+ * destra. Non essendoci nel file un'etichetta esplicita "DX"/"SX" per
+ * dirci quale sia quale, ho assegnato la colonna sinistra del foglio ai
+ * ruoli "_dx" e quella destra ai ruoli "_sx" (lo stesso ordine sinistra→
+ * destra con cui l'app elenca già DX prima di SX in ogni reparto). Se
+ * preferisci il contrario è una modifica di una riga sola (basta scambiare
+ * i due nomi colonna qui sotto): dimmelo pure.
+ */
+const KADERLISTE_1442_TEMPLATE_URL = "template-kaderliste-1-4-4-2.xlsx";
+const KADERLISTE_1442_SHEET = "09_U-16TYT Luogo";
+// Per ogni reparto fisso del modulo 1-4-4-2 (vedi REPARTI_GRID_PER_MODULO):
+// in quale colonna del foglio scrivere (nomeCol = colonna del nome, celle
+// unite es. "A14:F14"; club/jg/piede = colonne singole affiancate) e su
+// quali righe (capienza massima del blocco nel modello originale).
+const KADERLISTE_1442_MAP = {
+  TH:        { nomeCol: "W",  clubCol: "AC", jgCol: "AD", piedeCol: "AE", righe: [5, 9] },
+  AVE_dx:    { nomeCol: "A",  clubCol: "G",  jgCol: "H",  piedeCol: "I",  righe: [14, 18] },
+  IVE_dx:    { nomeCol: "L",  clubCol: "R",  jgCol: "S",  piedeCol: "T",  righe: [14, 20] },
+  IVE_sx:    { nomeCol: "AH", clubCol: "AN", jgCol: "AO", piedeCol: "AP", righe: [14, 18] },
+  AVE_sx:    { nomeCol: "AS", clubCol: "AY", jgCol: "AZ", piedeCol: "BA", righe: [15, 20] },
+  STA_dx:    { nomeCol: "A",  clubCol: "G",  jgCol: "H",  piedeCol: "I",  righe: [25, 29] },
+  MFZ_dx:    { nomeCol: "L",  clubCol: "R",  jgCol: "S",  piedeCol: "T",  righe: [25, 32] },
+  MFZ_sx:    { nomeCol: "AH", clubCol: "AN", jgCol: "AO", piedeCol: "AP", righe: [25, 31] },
+  STA_sx:    { nomeCol: "AS", clubCol: "AY", jgCol: "AZ", piedeCol: "BA", righe: [25, 31] },
+  STZ_10:    { nomeCol: "W",  clubCol: "AC", jgCol: "AD", piedeCol: "AE", righe: [33, 35] },
+  STZ_punta: { nomeCol: "W",  clubCol: "AC", jgCol: "AD", piedeCol: "AE", righe: [39, 44] },
+};
+// Celle di intestazione del modello (etichetta già stampata nel template,
+// qui scriviamo solo il valore accanto).
+const KADERLISTE_1442_INTESTAZIONE = {
+  team: "D3", saison: "D4", spielsysteme: "L4",
+  trainer: "D5", assistente1: "D6", assistente2: "D7", thTrainer: "D8", tom: "D9",
+  aggiornato: "D47",
+};
+function kaderlistePiedeCodice(piede) {
+  if (piede === "Destro") return "R";
+  if (piede === "Sinistro") return "L";
+  if (piede === "Ambidestro") return "R/L";
+  return "";
+}
+// Scrive un valore + colore in una cella del template, spezzando prima il
+// riferimento di stile condiviso con altre celle "gemelle" (stesso
+// formatting nel foglio originale): senza questo passaggio, ExcelJS
+// applicherebbe per errore lo stesso colore anche ad altre celle che nel
+// modello originale condividono lo stesso stile (bug verificato in fase di
+// test — righe non toccate cambiavano colore a cascata).
+function kaderlisteScriviCella(ws, addr, valore, coloreArgb) {
+  const cell = ws.getCell(addr);
+  cell.style = JSON.parse(JSON.stringify(cell.style || {}));
+  if (valore !== undefined) cell.value = valore;
+  if (coloreArgb) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: coloreArgb } };
+}
+function kaderlisteColoreStato(chiaveStato) {
+  if (!chiaveStato || !RADUNO_STATI_CON_COLORE_UFFICIALE.has(chiaveStato)) return null;
+  const s = statoLegenda(chiaveStato);
+  if (!s) return null;
+  return "FF" + s.colore.replace("#", "").toUpperCase();
+}
+async function esportaKaderlisteUfficiale(r) {
+  if (r.modulo !== "1-4-4-2") {
+    alert(`L'esportazione nel modello ufficiale è disponibile per ora solo per il modulo 1-4-4-2 (questo raduno usa ${r.modulo || "un altro modulo"}). Usa "Esporta Excel (semplice)", oppure mandami il modello ufficiale per ${r.modulo} e lo aggiungo.`);
+    return;
+  }
+  if (typeof ExcelJS === "undefined") {
+    alert("La libreria per l'esportazione colorata non è disponibile (offline e non ancora salvata in cache, oppure il file exceljs.min.js non è nella cartella dell'app). Riprova con internet attivo, oppure usa \"Esporta Excel (semplice)\".");
+    return;
+  }
+  let buffer;
+  try {
+    const resp = await fetch(KADERLISTE_1442_TEMPLATE_URL);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    buffer = await resp.arrayBuffer();
+  } catch (e) {
+    alert(`Non riesco a scaricare il modello ufficiale (${KADERLISTE_1442_TEMPLATE_URL}). Controlla che il file sia stato caricato nella stessa cartella di scout-manager.html su GitHub, oppure che tu sia online la prima volta (poi resta salvato per l'uso offline).`);
+    return;
+  }
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer);
+  const ws = wb.getWorksheet(KADERLISTE_1442_SHEET);
+  if (!ws) { alert(`Il modello non contiene il foglio "${KADERLISTE_1442_SHEET}" atteso.`); return; }
+
+  kaderlisteScriviCella(ws, KADERLISTE_1442_INTESTAZIONE.team, r.nome || "");
+  kaderlisteScriviCella(ws, KADERLISTE_1442_INTESTAZIONE.saison, r.stagione || "");
+  kaderlisteScriviCella(ws, KADERLISTE_1442_INTESTAZIONE.spielsysteme, r.modulo || "");
+  kaderlisteScriviCella(ws, KADERLISTE_1442_INTESTAZIONE.trainer, r.trainer || "");
+  kaderlisteScriviCella(ws, KADERLISTE_1442_INTESTAZIONE.assistente1, r.assistente1 || "");
+  kaderlisteScriviCella(ws, KADERLISTE_1442_INTESTAZIONE.assistente2, r.assistente2 || "");
+  kaderlisteScriviCella(ws, KADERLISTE_1442_INTESTAZIONE.thTrainer, r.thTrainer || "");
+  kaderlisteScriviCella(ws, KADERLISTE_1442_INTESTAZIONE.tom, r.tom || "");
+  kaderlisteScriviCella(ws, KADERLISTE_1442_INTESTAZIONE.aggiornato, formatDataIt(dataOggiLocale()));
+
+  const repartiTroncati = [];
+  Object.keys(KADERLISTE_1442_MAP).forEach(repartoId => {
+    const mappa = KADERLISTE_1442_MAP[repartoId];
+    const voci = (r.rosa || []).filter(x => x.reparto === repartoId);
+    const capienza = mappa.righe[1] - mappa.righe[0] + 1;
+    if (voci.length > capienza) {
+      const rep = repartiRaduno(r).find(rp => rp.id === repartoId);
+      repartiTroncati.push(`${rep ? rep.nome : repartoId} (${voci.length} giocatori, ne stanno ${capienza})`);
+    }
+    voci.slice(0, capienza).forEach((voce, i) => {
+      const p = players.find(pl => pl.id === voce.giocatoreId);
+      if (!p) return;
+      const riga = mappa.righe[0] + i;
+      const colore = kaderlisteColoreStato(voce.stato);
+      kaderlisteScriviCella(ws, `${mappa.nomeCol}${riga}`, `${p.cognome || ""} ${p.nome || ""}`.trim(), colore);
+      kaderlisteScriviCella(ws, `${mappa.clubCol}${riga}`, siglaSquadra(p.squadra));
+      kaderlisteScriviCella(ws, `${mappa.jgCol}${riga}`, p.dataNascita ? String(new Date(p.dataNascita).getFullYear()).slice(-2) : "");
+      kaderlisteScriviCella(ws, `${mappa.piedeCol}${riga}`, kaderlistePiedeCodice(p.piedePreferito));
+    });
+  });
+
+  const outBuffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([outBuffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const slug = (r.nome || "raduno").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  a.href = url;
+  a.download = `kaderliste-${slug || "tyt"}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+
+  if (repartiTroncati.length) {
+    alert(`Attenzione: alcuni reparti hanno più giocatori di quanti ne stiano nel modello ufficiale, quindi nel file scaricato sono stati inclusi solo i primi:\n\n${repartiTroncati.join("\n")}\n\nGli altri restano comunque nell'app (non sono stati rimossi dalla rosa).`);
   }
 }
 
