@@ -6650,8 +6650,30 @@ function renderRicercaWeekendHTML() {
   } else if (w.errore) {
     risultatiHTML = `<p style="color:var(--low);"><strong>Errore:</strong> ${esc(w.errore)}</p>`;
   } else if (w.risultati) {
-    const conGiocatori = w.risultati.filter(p => p.giocatoriCasa.length || p.giocatoriOspite.length);
+    // Ogni "colonna" squadra ha ora due gruppi: "confermati" (categoria
+    // esatta, o chip "Prima Squadra" per i campionati assoluti) mostrati
+    // subito come chip, e "possibili" (stesso club ma categoria non
+    // confermata) in una finestra <details> a comparsa, per non
+    // affollare la vista con tutti i giocatori genericamente associati
+    // al club.
+    const totaleGiocatori = p => p.giocatoriCasa.confermati.length + p.giocatoriCasa.possibili.length
+      + p.giocatoriOspite.confermati.length + p.giocatoriOspite.possibili.length;
+    const conGiocatori = w.risultati.filter(p => totaleGiocatori(p) > 0);
     const senzaGiocatori = w.risultati.length - conGiocatori.length;
+    const colonnaSquadra = (nomeSquadra, gruppo) => `
+      <div style="flex:1 1 220px; min-width:200px;">
+        <div class="muted" style="font-size:11.5px; margin-bottom:4px;">${esc(nomeSquadra)}</div>
+        <div class="cal-giocatori-collegati">
+          ${gruppo.confermati.length ? gruppo.confermati.map(g => `<span class="chip cal-apri-giocatore" data-player-id="${g.id}" style="cursor:pointer;">${esc(g.cognome)} ${esc(g.nome)}</span>`).join("") : `<span class="muted" style="font-size:12.5px;">—</span>`}
+        </div>
+        ${gruppo.possibili.length ? `
+          <details style="margin-top:4px;">
+            <summary class="muted" style="cursor:pointer; font-size:11.5px;">+${gruppo.possibili.length} altri giocatori possibili del club</summary>
+            <div class="cal-giocatori-collegati" style="margin-top:4px;">
+              ${gruppo.possibili.map(g => `<span class="chip cal-apri-giocatore" data-player-id="${g.id}" style="cursor:pointer;">${esc(g.cognome)} ${esc(g.nome)}</span>`).join("")}
+            </div>
+          </details>` : ""}
+      </div>`;
     if (!w.risultati.length) {
       risultatiHTML = `<p class="muted">Nessuna partita trovata dal Worker per queste date (potrebbe non esserci ancora un calendario pubblicato per questo periodo, es. giovanili in estate).</p>`;
     } else if (!conGiocatori.length) {
@@ -6669,18 +6691,8 @@ function renderRicercaWeekendHTML() {
                 </div>
               </div>
               <div style="display:flex; gap:18px; flex-wrap:wrap; margin-top:6px;">
-                <div style="flex:1 1 220px; min-width:200px;">
-                  <div class="muted" style="font-size:11.5px; margin-bottom:4px;">${esc(p.casa)}</div>
-                  <div class="cal-giocatori-collegati">
-                    ${p.giocatoriCasa.length ? p.giocatoriCasa.map(g => `<span class="chip cal-apri-giocatore" data-player-id="${g.id}" style="cursor:pointer;">${esc(g.cognome)} ${esc(g.nome)}</span>`).join("") : `<span class="muted" style="font-size:12.5px;">—</span>`}
-                  </div>
-                </div>
-                <div style="flex:1 1 220px; min-width:200px;">
-                  <div class="muted" style="font-size:11.5px; margin-bottom:4px;">${esc(p.ospite)}</div>
-                  <div class="cal-giocatori-collegati">
-                    ${p.giocatoriOspite.length ? p.giocatoriOspite.map(g => `<span class="chip cal-apri-giocatore" data-player-id="${g.id}" style="cursor:pointer;">${esc(g.cognome)} ${esc(g.nome)}</span>`).join("") : `<span class="muted" style="font-size:12.5px;">—</span>`}
-                  </div>
-                </div>
+                ${colonnaSquadra(p.casa, p.giocatoriCasa)}
+                ${colonnaSquadra(p.ospite, p.giocatoriOspite)}
               </div>
             </div>`).join("")}
         </div>
@@ -6689,16 +6701,18 @@ function renderRicercaWeekendHTML() {
     }
   }
 
-  // Mostra sempre eventuali errori per competizione (es. una squadra non
-  // raggiungibile), anche quando la ricerca nel complesso "riesce" — così
-  // non serve più aprire a mano l'indirizzo del Worker con &debug=1 per
-  // capire se qualcosa non ha funzionato.
-  const erroriDiagnostica = (w.diagnostica || []).filter(d => d.errore);
-  const diagnosticaHTML = (!w.inCorso && erroriDiagnostica.length) ? `
+  // Mostra sempre eventuali errori o esiti "vuoti" per competizione (es.
+  // una squadra non raggiungibile, oppure 0 partite trovate pur senza
+  // errori) anche quando la ricerca nel complesso "riesce" — così non
+  // serve più aprire a mano l'indirizzo del Worker con &debug=1 per
+  // capire se qualcosa non ha funzionato o se il calendario è davvero
+  // vuoto per queste date.
+  const daSegnalare = (w.diagnostica || []).filter(d => d.errore || d.partiteTrovateNellaPagina === 0);
+  const diagnosticaHTML = (!w.inCorso && daSegnalare.length) ? `
     <details style="margin-top:10px;">
-      <summary class="muted" style="cursor:pointer; font-size:12.5px;">${erroriDiagnostica.length} competizion${erroriDiagnostica.length === 1 ? "e ha" : "i hanno"} dato un errore durante questa ricerca (clicca per i dettagli)</summary>
+      <summary class="muted" style="cursor:pointer; font-size:12.5px;">${daSegnalare.length} competizion${daSegnalare.length === 1 ? "e" : "i"} da controllare durante questa ricerca (clicca per i dettagli)</summary>
       <ul style="margin:6px 0 0; padding-left:18px; font-size:12px;" class="muted">
-        ${erroriDiagnostica.map(d => `<li><strong>${esc(d.competizione)}</strong>: ${esc(d.errore)}</li>`).join("")}
+        ${daSegnalare.map(d => `<li><strong>${esc(d.competizione)}</strong>: ${d.errore ? esc(d.errore) : `0 partite trovate (${d.righeLette || 0} righe di testo lette)`}${d.estratto ? `<details style="margin-top:4px;"><summary style="cursor:pointer;">estratto del testo letto</summary><pre style="white-space:pre-wrap; font-size:11px; max-height:200px; overflow:auto;">${esc(d.estratto)}</pre></details>` : ""}</li>`).join("")}
       </ul>
     </details>` : "";
 
@@ -6752,9 +6766,11 @@ function wireRicercaWeekendHTML(content) {
     renderCalendario(content);
   };
   if (weekendRicerca.risultati) {
+    const conGiocatoriPerAggiungi = r => r.giocatoriCasa.confermati.length || r.giocatoriCasa.possibili.length
+      || r.giocatoriOspite.confermati.length || r.giocatoriOspite.possibili.length;
     content.querySelectorAll("[data-weekend-aggiungi]").forEach(btn => {
       btn.onclick = () => {
-        const p = weekendRicerca.risultati.filter(r => r.giocatoriCasa.length || r.giocatoriOspite.length)[Number(btn.dataset.weekendAggiungi)];
+        const p = weekendRicerca.risultati.filter(conGiocatoriPerAggiungi)[Number(btn.dataset.weekendAggiungi)];
         if (!p) return;
         calEventoInModifica = null;
         renderCalendario(content);
@@ -7021,22 +7037,34 @@ function trovaGiocatoriPerSquadra(testoRicerca) {
 // della squadra — perché lì il nome è sempre e solo il club (es. "FC
 // Lugano" gioca sia in Super League sia con l'U15/U19/U21: è la
 // competizione a dire quale). Se categoria è null (campionati assoluti)
-// vengono presi i giocatori senza categorie giovanili assegnate o
-// esplicitamente "Prima Squadra", per non riempire la partita di Super
+// vengono presi i giocatori con la categoria "Prima Squadra" assegnata
+// esplicitamente nella scheda, per non riempire la partita di Super
 // League con i ragazzini U15 dello stesso club.
+//
+// Restituisce due elenchi separati:
+// - confermati: giocatori del club corrispondenti anche per categoria
+//   esatta (o con la chip "Prima Squadra" quando categoria è null).
+// - possibili: altri giocatori dello stesso club trovati nel database
+//   ma senza quella categoria/chip esplicita (es. nessuna categoria
+//   assegnata, o una categoria diversa) — probabilmente dello stesso
+//   club ma non è certo che giochino in questa specifica partita.
 function trovaGiocatoriPerSquadraECategoria(nomeSquadra, categoria) {
   const ric = analizzaNomeSquadra(nomeSquadra);
-  if (!ric.core || ric.core.length < 3) return [];
-  const trovati = players.filter(p => {
-    if (!p.squadra) return false;
+  if (!ric.core || ric.core.length < 3) return { confermati: [], possibili: [] };
+  const confermati = [];
+  const possibili = [];
+  for (const p of players) {
+    if (!p.squadra) continue;
     const ps = analizzaNomeSquadra(p.squadra);
-    if (!ps.core || !squadreCoerenti(ric.core, ps.core)) return false;
+    if (!ps.core || !squadreCoerenti(ric.core, ps.core)) continue;
     const cats = p.categorie || [];
-    if (categoria) return cats.includes(categoria);
-    return cats.length === 0 || cats.includes("Prima Squadra");
-  });
-  trovati.sort((a, b) => `${a.cognome} ${a.nome}`.localeCompare(`${b.cognome} ${b.nome}`, "it"));
-  return trovati;
+    const èConfermato = categoria ? cats.includes(categoria) : cats.includes("Prima Squadra");
+    (èConfermato ? confermati : possibili).push(p);
+  }
+  const perNome = (a, b) => `${a.cognome} ${a.nome}`.localeCompare(`${b.cognome} ${b.nome}`, "it");
+  confermati.sort(perNome);
+  possibili.sort(perNome);
+  return { confermati, possibili };
 }
 
 // Calcola le colonne "probabili giocatori" da mostrare sotto un evento,
