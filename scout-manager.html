@@ -6583,7 +6583,11 @@ async function cercaPartiteWeekend(content, da, a) {
   const tutteLePartite = [];
   const tuttaLaDiagnostica = [];
   let indiceProssimo = 0;
-  const CONCORRENZA = 2;
+  // Il piano gratuito di ScrapeOps ammette UNA sola richiesta alla volta
+  // ("Concurrency Limit: 1" nella loro dashboard) — mandarne 2+ insieme
+  // fa fallire quelle in eccesso. Quindi qui si va rigorosamente in
+  // sequenza, una competizione alla volta.
+  const CONCORRENZA = 1;
 
   async function lavoratore() {
     while (indiceProssimo < COMPETIZIONI_MATCHCENTER.length) {
