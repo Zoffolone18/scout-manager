@@ -119,6 +119,13 @@ body{
   margin-top: 4px;
   font-family: var(--font-mono);
 }
+.app-versione{
+  font-size: 10.5px;
+  color: var(--muted);
+  opacity: 0.65;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+}
 
 .header-actions{
   display: flex;
@@ -653,19 +660,19 @@ body{
 .raduno-legenda-pallino{ width: 12px; height: 12px; border-radius: 50%; display: inline-block; border: 1px solid rgba(0,0,0,0.25); }
 .raduno-linea-row{ margin-bottom: 20px; }
 .raduno-linea-titolo{ font-family: var(--font-mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 8px; }
-.raduno-linea-reparti{ display: flex; flex-wrap: wrap; gap: 12px; }
-.raduno-linea-reparti .raduno-reparto-box{ flex: 1 1 260px; min-width: 240px; }
+.raduno-linea-reparti{ display: flex; flex-wrap: wrap; gap: 8px; }
+.raduno-linea-reparti .raduno-reparto-box{ flex: 1 1 190px; min-width: 175px; }
 /* Righe della griglia tattica fissa (per modulo): restano sempre su un'unica
    fila, come le colonne dell'Excel, con scroll orizzontale come ultima
    risorsa se proprio non entrano. */
 .raduno-linea-reparti-fissa{ flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
-.raduno-linea-reparti-fissa .raduno-reparto-box{ flex: 1 1 260px; min-width: 250px; }
+.raduno-linea-reparti-fissa .raduno-reparto-box{ flex: 1 1 190px; min-width: 175px; }
 /* Righe con un solo reparto (Portiere, 10er Zentral, Stürmer, ecc.): non ha
    senso farle allargare a tutta la riga come le righe con più caselle
    affiancate (terzini/centrali, ecc.) — restano alla stessa larghezza
    "naturale" di una singola casella e vengono centrate. */
 .raduno-linea-reparti-singola{ justify-content: center; }
-.raduno-linea-reparti-singola .raduno-reparto-box{ flex: 0 1 260px; }
+.raduno-linea-reparti-singola .raduno-reparto-box{ flex: 0 1 190px; }
 
 /* Zoom del campo tattico (pulsanti +/− oppure pinch a due dita su
    telefono/tablet, o Ctrl/Cmd+rotellina su desktop): il contenitore
@@ -688,29 +695,34 @@ body{
    disponibile nel contenitore principale dell'app. */
 .import-box.raduno-dettaglio-box{ max-width: none; width: 100%; box-sizing: border-box; }
 .rd-chip-giocatore.dragging{ opacity: 0.35; }
-.raduno-reparto-lista{ min-height: 28px; border-radius: 6px; transition: background .1s ease; }
-.raduno-linea-reparti .raduno-reparto-box{ padding: 10px 12px; }
+.raduno-reparto-lista{ min-height: 24px; border-radius: 6px; transition: background .1s ease; }
+.raduno-linea-reparti .raduno-reparto-box{ padding: 7px 8px; }
+.raduno-reparto-box h3{ font-size: 13px; margin: 0 0 4px; }
 
-/* Tabella compatta stile Kaderliste per i giocatori di un reparto */
-.raduno-tabella{ font-size: 12px; }
+/* Tabella compatta stile Kaderliste per i giocatori di un reparto — resa
+   ancora più compatta (meno spazi, colonna squadra più stretta, nomi
+   abbreviati a cognome + primo nome) per vedere più rosa a colpo d'occhio
+   senza dover zoomare tanto. */
+.raduno-tabella{ font-size: 11px; }
 .raduno-riga{
   display: grid;
-  grid-template-columns: 1fr 46px 22px 16px;
-  gap: 6px;
+  grid-template-columns: 1fr 34px 18px 14px;
+  gap: 4px;
   align-items: center;
-  padding: 3px 4px;
+  padding: 2px 3px;
   border-bottom: 1px solid var(--line);
 }
 .raduno-riga:last-child{ border-bottom: none; }
-.raduno-riga-header{ font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1px solid var(--gold-dim); }
+.raduno-riga-header{ font-family: var(--font-mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1px solid var(--gold-dim); }
 .raduno-riga.rd-chip-giocatore{ cursor: grab; }
 .raduno-riga.rd-chip-giocatore:hover{ background: rgba(255,255,255,0.03); }
 .rrg-nome{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.rrg-squadra{ font-family: var(--font-mono); font-size: 11px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rrg-squadra{ font-family: var(--font-mono); font-size: 10px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rrg-stato{ display: flex; justify-content: center; }
-.rrg-stato-swatch{ width: 15px; height: 15px; border-radius: 4px; border: 1.5px solid var(--line); padding: 0; cursor: pointer; }
-.rrg-azioni{ text-align: center; opacity: 0.6; cursor: pointer; font-size: 11px; }
+.rrg-stato-swatch{ width: 13px; height: 13px; border-radius: 4px; border: 1.5px solid var(--line); padding: 0; cursor: pointer; }
+.rrg-azioni{ text-align: center; opacity: 0.6; cursor: pointer; font-size: 10px; }
 .rrg-azioni:hover{ opacity: 1; }
+.rd-add-giocatore-input{ font-size: 11px; padding: 4px 6px; }
 
 /* Popup inline con gli swatch della legenda, mostrato sotto la riga del giocatore */
 .raduno-popup-stato{
@@ -1249,6 +1261,12 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
           <div class="app-subtitle">Schede giocatori · visionature · valutazioni — sincronizzato con Dropbox
             <button type="button" class="btn-rimuovi-logo" id="btn-rimuovi-logo">rimuovi logo</button>
           </div>
+          <!-- Aggiorno questa data/ora a mano ogni volta che ti mando una
+               nuova versione di scout-manager.html: serve solo a farti
+               capire, guardando qui, se il browser ha già caricato il file
+               nuovo che hai appena messo su GitHub oppure sta ancora
+               mostrando una copia vecchia rimasta in cache. -->
+          <div class="app-versione" title="Data e ora in cui questa versione del file è stata generata">Versione app: 24/07/2026 · 11:41</div>
         </div>
       </div>
     </header>
@@ -7490,6 +7508,16 @@ const SQUADRA_SIGLE_NOTE = {
   "neuchâtel xamax fcs": "NX", "ac bellinzona": "ACB", "fc thun": "THU",
   "team aff-ffv": "AFF", "fc black stars": "BLS", "fc bauma": "BAU"
 };
+// Nome abbreviato per la tabella compatta del raduno: cognome + solo la
+// prima parola del nome (utile quando il nome è composto da più parole,
+// es. "Justice Jeremiah" → "Justice"; sui nomi con trattino, es.
+// "Justice-Jeremiah", non c'è comunque uno spazio da tagliare e resta
+// intero, ma ci pensa l'ellissi CSS a troncarlo se serve). Il nome
+// completo resta sempre visibile passandoci sopra col mouse (title).
+function nomeCompattoRaduno(p) {
+  const primaParolaNome = (p.nome || "").trim().split(/\s+/)[0] || "";
+  return `${p.cognome || ""} ${primaParolaNome}`.trim();
+}
 function siglaSquadra(nomeSquadra) {
   if (!nomeSquadra) return "";
   const norm = nomeSquadra.trim().toLowerCase();
@@ -8070,7 +8098,7 @@ function radunoRepartoHTML(r, rep) {
               const classeMuted = stato ? "" : " muted";
               const rigaHTML = `
             <div class="raduno-riga rd-apri-giocatore rd-chip-giocatore" draggable="true" data-player-id="${x.player.id}" data-reparto="${esc(rep.id)}" style="${styleRiga}" title="Doppio click per aprire la scheda del giocatore">
-              <span class="rrg-nome" title="${esc(x.player.cognome + ' ' + x.player.nome)}">${esc(x.player.cognome)} ${esc(x.player.nome)}</span>
+              <span class="rrg-nome" title="${esc(x.player.cognome + ' ' + x.player.nome)}">${esc(nomeCompattoRaduno(x.player))}</span>
               <span class="rrg-squadra${classeMuted}" title="${esc(x.player.squadra || '')}">${esc(sigla)}</span>
               <span class="rrg-stato">
                 <button type="button" class="rrg-stato-swatch" data-apri-popup-stato="${x.giocatoreId}" title="${stato ? esc(stato.nome) : "Nessuno stato"} — clicca per cambiare" style="background:${stato ? stato.colore : "transparent"}; border-color:${stato ? "rgba(0,0,0,0.35)" : "var(--line)"};"></button>
