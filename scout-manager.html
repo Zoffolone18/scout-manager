@@ -672,7 +672,15 @@ body{
    scrolla, il blocco interno viene scalato mantenendo il layout invariato. */
 .raduno-zoom-controls{ display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .raduno-zoom-livello{ min-width: 44px; text-align: center; font-size: 12.5px; }
-.raduno-campo-zoom-scroll{ overflow: auto; touch-action: pan-x pan-y; padding: 6px; border: 1px solid var(--line); border-radius: 8px; max-height: 75vh; }
+/* Prima questo contenitore aveva un'altezza fissa (max-height: 75vh) con
+   scroll interno: sembrava una finestrella dentro cui "trascinarsi" con il
+   mouse per vedere il resto della rosa, invece di vedere tutto scorrendo
+   normalmente la pagina come nel resto dell'app. Adesso si allarga quanto
+   serve in altezza; se il contenuto (soprattutto da zoomato) è più largo
+   dello schermo resta uno scroll orizzontale come ultima risorsa — per
+   quello i pulsanti/pinch/Ctrl+rotellina di zoom permettono di rimpicciolire
+   fino a far entrare tutto. */
+.raduno-campo-zoom-scroll{ overflow-x: auto; overflow-y: visible; touch-action: pan-x pan-y; padding: 6px; border: 1px solid var(--line); border-radius: 8px; }
 .raduno-campo-zoom-inner{ transform-origin: top left; width: max-content; min-width: 100%; }
 /* La scheda del raduno non è limitata alla larghezza di lettura delle altre
    schermate (.import-box è pensato per testi, max-width 880px): qui invece
