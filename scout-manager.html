@@ -2976,7 +2976,24 @@ function switchTab(tab, editPlayer) {
   window.scrollTo(0, 0);
 }
 
+// Tiene traccia di "quale schermata" era visibile all'ultimo render, per
+// capire se questa chiamata a render() sta solo aggiornando la stessa
+// schermata (es. cambio di stato di un giocatore nel raduno, una modifica,
+// un filtro) oppure sta aprendo una schermata diversa (es. da lista raduni
+// a dettaglio raduno). Nel primo caso manteniamo la posizione di scroll
+// dell'utente (altrimenti, sostituendo tutto il contenuto della pagina,
+// alcuni browser spostano il focus sul <body> e la pagina salta in cima —
+// molto scomodo se si sta lavorando in fondo a una scheda lunga, es. sugli
+// attaccanti in un raduno). Nel secondo caso è giusto ripartire dall'alto.
+let ultimaChiaveVistaRender = null;
 function render(editPlayer) {
+  const chiaveVista = currentTab === "raduni"
+    ? `raduni|${raduniSezione}|${radunoCorrenteId || ""}`
+    : currentTab;
+  const stessaVista = chiaveVista === ultimaChiaveVistaRender;
+  const scrollDaMantenere = stessaVista ? window.scrollY : 0;
+  ultimaChiaveVistaRender = chiaveVista;
+
   migraTuttiSquadraCategorie(players);
   const content = document.getElementById("content");
   if (currentTab === "elenco") renderElenco(content);
@@ -2984,6 +3001,8 @@ function render(editPlayer) {
   else if (currentTab === "calendario") renderCalendario(content);
   else if (currentTab === "raduni") renderRaduni(content);
   else if (currentTab === "strumenti") renderStrumenti(content);
+
+  window.scrollTo(0, scrollDaMantenere);
 }
 
 /* ===================== ELENCO ===================== */
@@ -7519,6 +7538,12 @@ function renderRaduniLista(content) {
       if (r) esportaRadunoExcel(r);
     };
   });
+  content.querySelectorAll("[data-esporta-raduno-ufficiale]").forEach(btn => {
+    btn.onclick = () => {
+      const r = raduni.find(x => x.id === btn.dataset.esportaRadunoUfficiale);
+      if (r) esportaKaderlisteUfficiale(r);
+    };
+  });
   content.querySelectorAll("[data-elimina-raduno]").forEach(btn => {
     btn.onclick = () => {
       if (!confirm("Eliminare questo raduno? La rosa e tutti i dati associati andranno persi (i giocatori nell'Elenco non vengono toccati).")) return;
@@ -7540,7 +7565,8 @@ function radunoCardHTML(r) {
         <div class="import-actions">
           <button class="btn btn-ghost btn-sm" data-apri-raduno="${r.id}">Apri</button>
           <button class="btn btn-ghost btn-sm" data-modifica-raduno="${r.id}">Modifica</button>
-          <button class="btn btn-ghost btn-sm" data-esporta-raduno="${r.id}">Esporta Excel</button>
+          <button class="btn btn-ghost btn-sm" data-esporta-raduno="${r.id}">Esporta Lista</button>
+          ${r.modulo === "1-4-4-2" ? `<button class="btn btn-ghost btn-sm" data-esporta-raduno-ufficiale="${r.id}">Esporta Kaderliste ufficiale</button>` : ""}
           <button class="btn btn-ghost btn-sm" data-elimina-raduno="${r.id}">Elimina</button>
         </div>
       </div>
@@ -7731,7 +7757,7 @@ function renderRadunoDettaglio(content) {
         <h2 style="margin:0;">${esc(r.nome)}</h2>
         <div class="import-actions">
           <button class="btn btn-ghost btn-sm" id="btn-modifica-raduno">Modifica scheda</button>
-          <button class="btn btn-ghost btn-sm" id="btn-esporta-raduno-dett">Esporta Excel (semplice)</button>
+          <button class="btn btn-ghost btn-sm" id="btn-esporta-raduno-dett">Esporta Lista</button>
           ${r.modulo === "1-4-4-2" ? `<button class="btn btn-ghost btn-sm" id="btn-esporta-raduno-ufficiale">Esporta Kaderliste ufficiale</button>` : ""}
           <label class="btn btn-ghost btn-sm" style="cursor:pointer;">
             Importa/aggiungi da Excel
